@@ -33,6 +33,11 @@ export class DebugCPP extends DebugSession {
         this.gdb.on("exit", () => {
             this.sendEvent(new TerminatedEvent());
         });
+
+        // 加载要调试的程序（不能只启动不加载啊www...）
+        this.gdb.stdin?.write(`-file-exec-and-symbols "${program}"\n`);
+        this.gdb.stdin?.write(`-gdb-set pagination off\n`);
+        this.gdb.stdin?.write(`-exec-run\n`);
         
         this.sendResponse(response);
     }
