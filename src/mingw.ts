@@ -10,7 +10,7 @@ const MINGW_URL = 'https://files.1f0.de/mingw/mingw-w64-gcc-14.3-stable-r43.7z';
 export async function ensureMinGW(context: vscode.ExtensionContext): Promise<string> {  
     const targetDir = path.join(context.globalStorageUri.fsPath, 'mingw');
     const binDir = path.join(targetDir, 'bin');
-    const gpp = path.join(binDir, 'g++.exe');
+    const gpp = path.join(binDir, 'x86_64-w64-mingw32-g++.exe');
     
     console.log('[MinGW] 检查路径g++:', gpp);
     
