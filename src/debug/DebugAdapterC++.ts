@@ -1,8 +1,8 @@
 import { DebugSession, InitializedEvent, TerminatedEvent, OutputEvent } from '@vscode/debugadapter';
 import { DebugProtocol } from '@vscode/debugprotocol';
+import * as fs from 'fs';
 // npm install --save-dev @vscode/debugadapter @vscode/debugprotocol
 import * as child_process from 'child_process';
-import { text } from 'stream/consumers';
 
 export class DebugCPP extends DebugSession {
     private gdb?: child_process.ChildProcess;
@@ -23,6 +23,12 @@ export class DebugCPP extends DebugSession {
         const program = args.program;
         const cwd = args.cwd || program.cwd();
 
+        if (!fs.existsSync(program)) {
+            this.sendEvent(new OutputEvent(`Not Found: ${program}\n`));
+            this.sendResponse(response);
+            return;
+        }
+
         this.gdb = child_process.spawn("gdb", ["--interpreter=mi"], {cwd});
 
         this.gdb.stdout?.on("data", data => {
@@ -38,7 +44,8 @@ export class DebugCPP extends DebugSession {
         });
 
         // 加载要调试的程序（不能只启动不加载啊www...）
-        this.gdb.stdin?.write(`-file-exec-and-symbols "${program}"\n`);
+        const winToUnixProgram = program.replace(/\\/g, '/');
+        this.gdb.stdin?.write(`-file-exec-and-symbols "${winToUnixProgram}"\n`);
         this.gdb.stdin?.write(`-gdb-set pagination off\n`);
         this.gdb.stdin?.write(`-exec-run\n`);
         
