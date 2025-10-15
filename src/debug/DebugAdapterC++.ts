@@ -2,6 +2,7 @@ import { DebugSession, InitializedEvent, TerminatedEvent, OutputEvent } from '@v
 import { DebugProtocol } from '@vscode/debugprotocol';
 // npm install --save-dev @vscode/debugadapter @vscode/debugprotocol
 import * as child_process from 'child_process';
+import { text } from 'stream/consumers';
 
 export class DebugCPP extends DebugSession {
     private gdb?: child_process.ChildProcess;
@@ -25,10 +26,12 @@ export class DebugCPP extends DebugSession {
         this.gdb = child_process.spawn("gdb", ["--interpreter=mi"], {cwd});
 
         this.gdb.stdout?.on("data", data => {
-            this.sendEvent(new OutputEvent(data.toString()));
+            const text = data.toString();
+            this.sendEvent(new OutputEvent(`[GDB] ${text}`));
         });
         this.gdb.stderr?.on("data", data => {
-            this.sendEvent(new OutputEvent(data.toString()));
+            const text = data.toString();
+            this.sendEvent(new OutputEvent(`[GDB-ERR] ${text}`));
         });
         this.gdb.on("exit", () => {
             this.sendEvent(new TerminatedEvent());

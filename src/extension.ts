@@ -89,7 +89,7 @@ export async function activate(context: vscode.ExtensionContext) {
     	}
 
 		const config: vscode.DebugConfiguration = {
-			type: 'cppdbg',
+			type: 'xq_cppdbg',
         	name: 'C++ Debugger',
         	request: 'launch',
         	program: exe,
