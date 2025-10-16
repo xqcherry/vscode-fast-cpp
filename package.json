@@ -112,7 +112,7 @@
             "name": "C++ Debugger",
             "type": "xq_cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/xq.exe",
+            "program": "${workspaceFolder}/a.exe",
             "cwd": "${workspaceFolder}",
             "stopAtEntry": true
           }
