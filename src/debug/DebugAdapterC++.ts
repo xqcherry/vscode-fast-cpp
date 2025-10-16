@@ -1,6 +1,7 @@
 import { DebugSession, InitializedEvent, TerminatedEvent, OutputEvent } from '@vscode/debugadapter';
 import { DebugProtocol } from '@vscode/debugprotocol';
 import * as fs from 'fs';
+import * as path from 'path';
 // npm install --save-dev @vscode/debugadapter @vscode/debugprotocol
 import * as child_process from 'child_process';
 
@@ -21,7 +22,7 @@ export class DebugCPP extends DebugSession {
     // 启动 GDB
     protected launchRequest(response: DebugProtocol.LaunchResponse, args: any): void {
         const program = args.program;
-        const cwd = args.cwd || program.cwd();
+        const cwd = args.cwd || path.dirname(program);
 
         if (!fs.existsSync(program)) {
             this.sendEvent(new OutputEvent(`Not Found: ${program}\n`));
@@ -29,15 +30,14 @@ export class DebugCPP extends DebugSession {
             return;
         }
 
-        const command = `gdb "${program}"`;
-        child_process.spawn("cmd.exe", ["/k", command], {
+        const gdbcmd = `gdb "${program}"`;
+        child_process.spawn("cmd.exe", ["/c", "start", "cmd", "/k", gdbcmd], {
             cwd,
             detached: true,
-            stdio: "ignore",
             shell: true,
         });
-
-        this.sendEvent(new OutputEvent(`[Launch] Opened new console: ${command}\n`));   
+        
+        this.sendEvent(new OutputEvent(`[Launch] Opened new GDB console for ${program}\n`));
         this.sendResponse(response);
     }
     // 停止调试

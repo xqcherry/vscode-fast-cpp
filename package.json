@@ -40,7 +40,7 @@
       },
       {
         "command": "xq.debug",
-        "title": "debug C++"
+        "title": "GDB调试"
       }
     ],
     "keybindings": [
