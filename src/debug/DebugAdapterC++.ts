@@ -29,26 +29,15 @@ export class DebugCPP extends DebugSession {
             return;
         }
 
-        this.gdb = child_process.spawn("gdb", ["--interpreter=mi"], {cwd});
-
-        this.gdb.stdout?.on("data", data => {
-            const text = data.toString();
-            this.sendEvent(new OutputEvent(`[GDB] ${text}`));
-        });
-        this.gdb.stderr?.on("data", data => {
-            const text = data.toString();
-            this.sendEvent(new OutputEvent(`[GDB-ERR] ${text}`));
-        });
-        this.gdb.on("exit", () => {
-            this.sendEvent(new TerminatedEvent());
+        const command = `gdb "${program}"`;
+        child_process.spawn("cmd.exe", ["/k", command], {
+            cwd,
+            detached: true,
+            stdio: "ignore",
+            shell: true,
         });
 
-        // 加载要调试的程序（不能只启动不加载啊www...）
-        const winToUnixProgram = program.replace(/\\/g, '/');
-        this.gdb.stdin?.write(`-file-exec-and-symbols "${winToUnixProgram}"\n`);
-        this.gdb.stdin?.write(`-gdb-set pagination off\n`);
-        this.gdb.stdin?.write(`-exec-run\n`);
-        
+        this.sendEvent(new OutputEvent(`[Launch] Opened new console: ${command}\n`));   
         this.sendResponse(response);
     }
     // 停止调试
