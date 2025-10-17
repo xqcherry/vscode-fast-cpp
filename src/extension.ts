@@ -18,7 +18,7 @@ async function compileFile(gpp: string): Promise<string | null> {
 	const exe = src.replace(/\.(cpp|c)$/, '.exe');
 
 	try {
-		const args = ['-static', '-static-libgcc', '-static-libstdc++', src, '-o', exe];
+		const args = ['-g', '-O0', '-static', '-static-libgcc', '-static-libstdc++', src, '-o', exe];
 		console.log(`[compile] g++ ${args.join(' ')}`);
 		console.log('是否存在：', fs.existsSync(gpp));
 		console.log('是否存在：', fs.existsSync(src));
