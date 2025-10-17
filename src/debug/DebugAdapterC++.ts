@@ -31,10 +31,10 @@ export class DebugCPP extends DebugSession {
         }
         // 命令行GDB调试
         const gdbcmd = `gdb "${program}"`;
-        this.gdb = child_process.spawn("cmd.exe", ["/c", "start", "cmd", "/k", gdbcmd], {
+        this.gdb = child_process.spawn("cmd.exe", ["/c", "start", '""', "/WAIT", "cmd", "/k", gdbcmd], {
             cwd,
             detached: true,
-            shell: true,
+            shell: false,
         });
         this.gdb.on("exit", () => {
             this.sendEvent(new OutputEvent(`[External GDB closed]\n`));
