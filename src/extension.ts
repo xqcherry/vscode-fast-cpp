@@ -32,7 +32,6 @@ async function compileFile(gpp: string): Promise<string | null> {
 			return null;
 		}
 
-		// 静默编译
         cp.execFileSync(gpp, args, {
             cwd: path.dirname(src),
             encoding: 'utf8',
