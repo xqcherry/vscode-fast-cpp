@@ -31,7 +31,7 @@ export class DebugCPP extends DebugSession {
         }
         // 命令行GDB调试
         const gdbcmd = `gdb "${program}"`;
-        this.gdb = child_process.spawn("cmd.exe", ["/c", "start", '""', "/WAIT", "cmd", "/k", gdbcmd], {
+        this.gdb = child_process.spawn("cmd.exe", ["/c", "start", '""', "/WAIT", "cmd", "/c", gdbcmd], {
             cwd,
             detached: true,
             shell: false,
