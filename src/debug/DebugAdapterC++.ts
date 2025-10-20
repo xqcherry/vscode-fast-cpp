@@ -146,6 +146,9 @@ export class DebugCPP extends DebugSession {
     }
     // 发送请求
     protected async launchRequest(response: DebugProtocol.LaunchResponse, args: any): Promise<void> {
+        // this.sendEvent(new OutputEvent(`[DEBUG] program: ${args.program}\n`));
+        // this.sendEvent(new OutputEvent(`[DEBUG] cwd: ${args.cwd}\n`));
+
         try {
             this.programPath = args.program;
             this.cwd = args.cws || path.dirname(this.programPath);
@@ -155,6 +158,9 @@ export class DebugCPP extends DebugSession {
                 this.sendResponse(response);
                 return;
             }
+            // 一定要将路径中/改成\, 不然识别不到xd
+            const norProPath = this.programPath.replace(/\\/g, '/');
+            const norProCwd = this.cwd.replace(/\\/g, '/');
 
             this.gdb.start(this.cwd); // 启动gdb
             this.gdb.setCallBack((type: string, payload: string) => { // 监听gdb解析并发送给vscode
@@ -175,9 +181,9 @@ export class DebugCPP extends DebugSession {
                 }
             });
             // 初始会话,自动编译当前文件
-            await this.gdb.sendCommand(`-file-exec-and-symbols "${this.programPath}"`); // 指定要调试的可执行文件路径
+            await this.gdb.sendCommand(`-file-exec-and-symbols "${norProPath}"`); // 指定要调试的可执行文件路径
             await this.gdb.sendCommand(`-gdb-set mi-async on`); // 启用GDB/MI的异步模式
-            await this.gdb.sendCommand(`-environment-cd "${this.cwd}"`); // 设置工作目录
+            await this.gdb.sendCommand(`-environment-cd "${norProCwd}"`); // 设置工作目录
             await this.gdb.sendCommand(`-break-insert main`);
 
             if (args.stopOnEntry) {
