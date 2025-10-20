@@ -230,12 +230,59 @@ export class DebugCPP extends DebugSession {
         this.sendResponse(response);
     }
 
-    protected async continueRequest(response: DebugProtocol.ContinueResponse,): Promise<void> {
+    protected async configurationDoneRequest(response: DebugProtocol.ConfigurationDoneResponse): Promise<void> {
+        try {
+            await this.gdb.sendCommand(`-exec-run`);
+            this.sendResponse(response);
+        } catch (err:any) {
+            this.sendEvent(new OutputEvent(`[run error] ${err.message}\n`));
+            this.sendResponse(response);
+        }
+    }
+
+    protected async continueRequest(response: DebugProtocol.ContinueResponse): Promise<void> {
         try {
             await this.gdb.sendCommand(`-exec-continue`);
             this.sendResponse(response);
         } catch (err:any) {
             this.sendEvent(new OutputEvent(`[continue error] ${err.message}\n`));
+            this.sendResponse(response);
+        }
+    }
+
+    protected async evaluateRequest(
+        response: DebugProtocol.EvaluateResponse,
+        args: DebugProtocol.EvaluateArguments
+    ): Promise<void> {
+        try {
+            const expr = args.expression;
+
+            if (args.context === 'repl') {
+                const raw: any = await this.gdb.sendCommand(expr.startsWith('-') ? expr : `-interpreter-exec console "${expr}"`);
+                response.body = {
+                    result: raw.raw || '(ok)',
+                    variablesReference: 0
+                };
+                this.sendResponse(response);
+                return;
+            }
+            
+            const raw: any = await this.gdb.sendCommand(`-data-evaluate-expression "${expr}"`);
+            const txt = raw.raw;
+            const match = txt.match(/value="([^"]+)"/);
+            const val = match ? match[1] : '(no value)';
+
+            response.body = {
+                result: val,
+                variablesReference: 0
+            };
+            this.sendResponse(response);
+        } catch (err: any) {
+            this.sendEvent(new OutputEvent(`[evaluate error] ${err.message}\n`));
+            response.body = {
+                result: `(error) ${err.message}`,
+                variablesReference: 0 
+            };
             this.sendResponse(response);
         }
     }
@@ -250,7 +297,43 @@ export class DebugCPP extends DebugSession {
         }
     }
 
-    protected async stackTraceRequest(response: DebugProtocol.StackTraceResponse,): Promise<void> {
+    protected async stepInRequest(response: DebugProtocol.StepInResponse): Promise<void> {
+        try {
+            await this.gdb.sendCommand(`-exec-step`);
+            this.sendResponse(response);
+        } catch (err:any) {
+            this.sendEvent(new OutputEvent(`[step error] ${err.message}\n`));
+            this.sendResponse(response);
+        }
+    }
+
+    protected async variablesRequest(response: DebugProtocol.VariablesResponse): Promise<void> {
+        
+        try {
+            const raw: any = await this.gdb.sendCommand(`-stack-list-variables --all-values`);
+            const txt = raw.raw;
+            const vars: DebugProtocol.Variable[] = [];
+
+            const varRe = /name="([^"]+)",value="([^"]*)"/g;
+            let match;
+            while ((match = varRe.exec(txt)) !== null) {
+                vars.push({
+                    name: match[1],
+                    value: match[2] || '(unavailable)',
+                    variablesReference: 0
+                });
+            }
+
+            response.body = { variables: vars };
+            this.sendResponse(response);
+        } catch (err: any) {
+            this.sendEvent(new OutputEvent(`[variables error] ${err.message}\n`));
+            response.body = { variables: [] };
+            this.sendResponse(response);
+        }
+    }
+
+    protected async stackTraceRequest(response: DebugProtocol.StackTraceResponse): Promise<void> {
         
         try {
             const raw: any = await this.gdb.sendCommand(`-stack-list-frames`);
