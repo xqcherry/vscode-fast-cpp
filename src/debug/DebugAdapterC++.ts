@@ -184,23 +184,26 @@ export class DebugCPP extends DebugSession {
             await this.gdb.sendCommand(`-file-exec-and-symbols "${norProPath}"`); // 指定要调试的可执行文件路径
             await this.gdb.sendCommand(`-gdb-set mi-async on`); // 启用GDB/MI的异步模式
             await this.gdb.sendCommand(`-environment-cd "${norProCwd}"`); // 设置工作目录
-            await this.gdb.sendCommand(`-break-insert main`);
+            // await this.gdb.sendCommand(`-break-insert main`);
 
-            if (args.stopOnEntry) {
-                await this.gdb.sendCommand(`-exec-run --start`); // true则在main函数暂停
-            }
-            else {
-                await this.gdb.sendCommand(`-exec-run`);
-            }
+            // true则在main函数暂停
+            // if (args.stopOnEntry) {
+            //     await this.gdb.sendCommand(`-exec-run --start`); 
+            // }
+            // else {
+            //     await this.gdb.sendCommand(`-exec-run`);
+            // }
+            // 如果不想在main停止，直接把else分支内容输出,同时把上面给insert-main指令语句注释
+            await this.gdb.sendCommand(`-exec-run`);
 
-            this.sendEvent(new OutputEvent(`[Launch] GBD-MI started for ${this.programPath}\n`));
+            this.sendEvent(new OutputEvent(`[Launch] GBD-MI 启动成功, 路径为: ${this.programPath}\n`));
             this.sendResponse(response);
         } catch(err) {
             this.sendEvent(new OutputEvent(`[Launch Error] ${err}\n`));
             this.sendResponse(response);
         }
     }
-
+    // 结束进程
     protected disconnectRequest(response: DebugProtocol.DisconnectResponse): void {
         if(this.gdb.isRunning()) {
             this.gdb.sendCommand('-gdb-exit');
@@ -212,6 +215,8 @@ export class DebugCPP extends DebugSession {
 
     // 接下来实现map
     // DAP <--> GDB-MI
+
+    // 断点设置
     protected async setBreakPointsRequest(
         response: DebugProtocol.SetBreakpointsResponse,
         args: DebugProtocol.SetBreakpointsArguments): Promise<void> {
@@ -240,7 +245,7 @@ export class DebugCPP extends DebugSession {
         response.body = {breakpoints: outbps};
         this.sendResponse(response);
     }
-
+    // 启动调试
     protected async configurationDoneRequest(response: DebugProtocol.ConfigurationDoneResponse): Promise<void> {
         try {
             await this.gdb.sendCommand(`-exec-run`);
@@ -250,17 +255,7 @@ export class DebugCPP extends DebugSession {
             this.sendResponse(response);
         }
     }
-
-    protected async continueRequest(response: DebugProtocol.ContinueResponse): Promise<void> {
-        try {
-            await this.gdb.sendCommand(`-exec-continue`);
-            this.sendResponse(response);
-        } catch (err:any) {
-            this.sendEvent(new OutputEvent(`[continue error] ${err.message}\n`));
-            this.sendResponse(response);
-        }
-    }
-
+    // 表达式求值
     protected async evaluateRequest(
         response: DebugProtocol.EvaluateResponse,
         args: DebugProtocol.EvaluateArguments
@@ -297,7 +292,17 @@ export class DebugCPP extends DebugSession {
             this.sendResponse(response);
         }
     }
-
+    // 继续执行
+    protected async continueRequest(response: DebugProtocol.ContinueResponse): Promise<void> {
+        try {
+            await this.gdb.sendCommand(`-exec-continue`);
+            this.sendResponse(response);
+        } catch (err:any) {
+            this.sendEvent(new OutputEvent(`[continue error] ${err.message}\n`));
+            this.sendResponse(response);
+        }
+    }
+    // 单步跳过
     protected async nextRequest(response: DebugProtocol.NextResponse): Promise<void> {
         try {
             await this.gdb.sendCommand(`-exec-next`);
@@ -307,7 +312,7 @@ export class DebugCPP extends DebugSession {
             this.sendResponse(response);
         }
     }
-
+    // 单步进入
     protected async stepInRequest(response: DebugProtocol.StepInResponse): Promise<void> {
         try {
             await this.gdb.sendCommand(`-exec-step`);
@@ -317,7 +322,7 @@ export class DebugCPP extends DebugSession {
             this.sendResponse(response);
         }
     }
-
+    // 查看变量
     protected async variablesRequest(response: DebugProtocol.VariablesResponse): Promise<void> {
         
         try {
@@ -343,7 +348,7 @@ export class DebugCPP extends DebugSession {
             this.sendResponse(response);
         }
     }
-
+    // 查看堆栈
     protected async stackTraceRequest(response: DebugProtocol.StackTraceResponse): Promise<void> {
         
         try {
