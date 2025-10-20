@@ -174,12 +174,17 @@ export class DebugCPP extends DebugSession {
                         break;
                 }
             });
-            // 初始会话
-            await this.gdb.sendCommand(`-file-exec-and-symbols "${this.programPath}"`);// 指定要调试的可执行文件路径
+            // 初始会话,自动编译当前文件
+            await this.gdb.sendCommand(`-file-exec-and-symbols "${this.programPath}"`); // 指定要调试的可执行文件路径
             await this.gdb.sendCommand(`-gdb-set mi-async on`); // 启用GDB/MI的异步模式
+            await this.gdb.sendCommand(`-environment-cd "${this.cwd}"`); // 设置工作目录
+            await this.gdb.sendCommand(`-break-insert main`);
 
             if (args.stopOnEntry) {
                 await this.gdb.sendCommand(`-exec-run --start`); // true则在main函数暂停
+            }
+            else {
+                await this.gdb.sendCommand(`-exec-run`);
             }
 
             this.sendEvent(new OutputEvent(`[Launch] GBD-MI started for ${this.programPath}\n`));
