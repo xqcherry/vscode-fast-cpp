@@ -293,7 +293,7 @@ export class DebugCPP extends DebugSession {
         args: DebugProtocol.SetBreakpointsArguments): Promise<void> {
         
         const source = args.source.path || args.source.name || '<unknown>';
-
+        const norProsource = path.resolve(source).replace(/\\/g, '/');
         // 每次setBreakpoints都是完整替换source的断点列表,
         // 先删除之前该source的所有断点，否则命令行与可视化不同步xd
         const pre = this.breakpoints.get(source) || [];
@@ -307,7 +307,7 @@ export class DebugCPP extends DebugSession {
         for(const bp of args.breakpoints || []) {
             try {
                 const line = bp.line;
-                const insertcmd = `-break-insert "${source}:${line}"`;
+                const insertcmd = `-break-insert "${norProsource}:${line}"`;
                 const raw: any = await this.gdb.sendCommand(insertcmd);
                 const mat = (raw.raw || '').match(/number="([^"]+)"/);
                 const gdbId = mat ? parseInt(mat[1], 10) : undefined;
