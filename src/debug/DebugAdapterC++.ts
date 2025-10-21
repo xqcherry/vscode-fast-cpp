@@ -3,7 +3,7 @@ import { DebugProtocol } from '@vscode/debugprotocol';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as child_process from 'child_process';
-import { t } from 'tar';
+import { threadId } from 'worker_threads';
 // npm install --save-dev @vscode/debugadapter @vscode/debugprotocol
 
 // 控制GDB进程
@@ -132,6 +132,21 @@ export class DebugCPP extends DebugSession {
     private programPath = '';
     private breakpoints = new Map<string, Array<{ line: number, id?: number }>>();
 
+    // 进程管理
+    private threads = new Map<number, {id: number, name: string}>();
+    private nextThreadId = 1;
+    private currThreddId = 1;
+    // 栈帧管理
+    private frameByThread = new Map<number, DebugProtocol.StackFrame[]>();
+    private currFrameByThread = new Map<number, number>();
+    // 变量引用管理
+    private nextVarRef = 1;
+    private varRefMap = new Map<number, {
+        type: 'locals' | 'globals',
+        frameIndex?: number,
+        threadId?: number
+    }>();
+
     public constructor() {
         super();
     }
@@ -151,7 +166,7 @@ export class DebugCPP extends DebugSession {
 
         try {
             this.programPath = args.program;
-            this.cwd = args.cws || path.dirname(this.programPath);
+            this.cwd = args.cwd || path.dirname(this.programPath);
 
             if (!this.programPath || !fs.existsSync(this.programPath)) {
                 this.sendEvent(new OutputEvent(`未找到可执行文件: ${this.programPath}\n`));
@@ -170,12 +185,28 @@ export class DebugCPP extends DebugSession {
                         break;
                     case 'async':
                         if(payload.startsWith('stopped')) {
-                            this.sendEvent(new StoppedEvent('breakpoint', 1));
+                            const tidm = payload.match(/thread-id="([^"]+)"/);
+                            const tid = tidm ? parseInt(tidm[1], 10) : 1;
+                            const currThreddId = tid;
+                            this.sendEvent(new StoppedEvent('breakpoint', tid));
+                        }
+                        else if(payload.includes('exited-normally') || payload.includes('exited')) {
+                            this.sendEvent(new TerminatedEvent());
                         }
                         break;
                     case 'notify':
                         if(payload.startsWith('thread-created')) {
-                            this.sendEvent(new ThreadEvent('started', 1));
+                            const idm = payload.match(/id="([^"]+)"/);
+                            const tid = idm ? parseInt(idm[1], 10) : this.nextThreadId ++;
+                            this.sendEvent(new ThreadEvent('started', tid));
+                        }
+                        else if(payload.startsWith('thread-exited')) {
+                            const idm = payload.match(/id="([^"]+)"/);
+                            const tid = idm ? parseInt(idm[1], 10) : undefined;
+                            if(tid && this.threads.has(tid)) {
+                                this.threads.delete(tid);
+                                this.sendEvent(new ThreadEvent('exited', tid));
+                            }
                         }
                         break;
                 }
@@ -203,7 +234,7 @@ export class DebugCPP extends DebugSession {
             this.sendResponse(response);
         }
     }
-    // 结束进程
+    // 退出gdb
     protected disconnectRequest(response: DebugProtocol.DisconnectResponse): void {
         if(this.gdb.isRunning()) {
             this.gdb.sendCommand('-gdb-exit');
@@ -216,14 +247,76 @@ export class DebugCPP extends DebugSession {
     // 接下来实现map
     // DAP <--> GDB-MI
 
+    // 线程管理
+    protected async threadsRequest(response: DebugProtocol.ThreadsResponse): Promise<void> {
+        try {
+            if(this.threads.size === 0) {
+                this.threads.set(1, {id: 1, name: 'Main Thread'});
+            }
+            const list = Array.from(this.threads.values()).map(t => ({id: t.id, name: t.name}));
+            response.body = {threads: list};
+            this.sendResponse(response);
+        } catch(err : any) {
+            response.body = {threads: [{id: 1, name: 'Main Thread'}]};
+            this.sendResponse(response);
+        }
+    }
+    // 暂停程序
+    protected async pauseRequest(response: DebugProtocol.PauseResponse): Promise<void> {
+        try {
+            await this.gdb.sendCommand('-exec-interrupt');
+            this.sendResponse(response);
+        } catch (err : any) {
+            this.sendEvent(new OutputEvent(`[pause error] ${err.message}\n`));
+            this.sendResponse(response);
+        }
+    }
+    // 继续执行
+    protected async continueRequest(response: DebugProtocol.ContinueResponse): Promise<void> {
+        try {
+            await this.gdb.sendCommand(`-exec-continue`);
+            this.sendResponse(response);
+        } catch (err:any) {
+            this.sendEvent(new OutputEvent(`[continue error] ${err.message}\n`));
+            this.sendResponse(response);
+        }
+    }
+    // 单步跳过
+    protected async nextRequest(response: DebugProtocol.NextResponse): Promise<void> {
+        try {
+            await this.gdb.sendCommand(`-exec-next`);
+            this.sendResponse(response);
+        } catch (err:any) {
+            this.sendEvent(new OutputEvent(`[next error] ${err.message}\n`));
+            this.sendResponse(response);
+        }
+    }
+    // 单步进入
+    protected async stepInRequest(response: DebugProtocol.StepInResponse): Promise<void> {
+        try {
+            await this.gdb.sendCommand(`-exec-step`);
+            this.sendResponse(response);
+        } catch (err:any) {
+            this.sendEvent(new OutputEvent(`[step error] ${err.message}\n`));
+            this.sendResponse(response);
+        }
+    }
     // 断点设置
     protected async setBreakPointsRequest(
         response: DebugProtocol.SetBreakpointsResponse,
         args: DebugProtocol.SetBreakpointsArguments): Promise<void> {
         
         const source = args.source.path || args.source.name || '<unknown>';
-        this.breakpoints.set(source, []);
 
+        // 每次setBreakpoints都是完整替换source的断点列表,
+        // 先删除之前该source的所有断点，否则命令行与可视化不同步xd
+        // const pre = this.breakpoints.get(source) || [];
+        // const gdbIdDelete = pre.map(t => t.id).filter(id => id !== undefined) as number[];
+        // if(gdbIdDelete.length > 0) {
+        //     await this.gdb.sendCommand(`-break-delete ${gdbIdDelete.join(' ')}`);
+        // }
+
+        this.breakpoints.set(source, []);
         const outbps : DebugProtocol.Breakpoint[] = [];
         for(const bp of args.breakpoints || []) {
             try {
@@ -289,36 +382,6 @@ export class DebugCPP extends DebugSession {
                 result: `(error) ${err.message}`,
                 variablesReference: 0 
             };
-            this.sendResponse(response);
-        }
-    }
-    // 继续执行
-    protected async continueRequest(response: DebugProtocol.ContinueResponse): Promise<void> {
-        try {
-            await this.gdb.sendCommand(`-exec-continue`);
-            this.sendResponse(response);
-        } catch (err:any) {
-            this.sendEvent(new OutputEvent(`[continue error] ${err.message}\n`));
-            this.sendResponse(response);
-        }
-    }
-    // 单步跳过
-    protected async nextRequest(response: DebugProtocol.NextResponse): Promise<void> {
-        try {
-            await this.gdb.sendCommand(`-exec-next`);
-            this.sendResponse(response);
-        } catch (err:any) {
-            this.sendEvent(new OutputEvent(`[next error] ${err.message}\n`));
-            this.sendResponse(response);
-        }
-    }
-    // 单步进入
-    protected async stepInRequest(response: DebugProtocol.StepInResponse): Promise<void> {
-        try {
-            await this.gdb.sendCommand(`-exec-step`);
-            this.sendResponse(response);
-        } catch (err:any) {
-            this.sendEvent(new OutputEvent(`[step error] ${err.message}\n`));
             this.sendResponse(response);
         }
     }
