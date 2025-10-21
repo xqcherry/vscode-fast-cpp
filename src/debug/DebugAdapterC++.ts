@@ -1,9 +1,8 @@
 import { DebugSession, InitializedEvent, ThreadEvent, OutputEvent, StoppedEvent, TerminatedEvent} from '@vscode/debugadapter';
-import { DebugProtocol } from '@vscode/debugprotocol';
+import { DebugProtocol} from '@vscode/debugprotocol';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as child_process from 'child_process';
-import { threadId } from 'worker_threads';
 // npm install --save-dev @vscode/debugadapter @vscode/debugprotocol
 
 // 控制GDB进程
@@ -135,7 +134,7 @@ export class DebugCPP extends DebugSession {
     // 进程管理
     private threads = new Map<number, {id: number, name: string}>();
     private nextThreadId = 1;
-    private currThreddId = 1;
+    private currThreadId = 1;
     // 栈帧管理
     private frameByThread = new Map<number, DebugProtocol.StackFrame[]>();
     private currFrameByThread = new Map<number, number>();
@@ -187,7 +186,7 @@ export class DebugCPP extends DebugSession {
                         if(payload.startsWith('stopped')) {
                             const tidm = payload.match(/thread-id="([^"]+)"/);
                             const tid = tidm ? parseInt(tidm[1], 10) : 1;
-                            const currThreddId = tid;
+                            this.currThreadId = tid;
                             this.sendEvent(new StoppedEvent('breakpoint', tid));
                         }
                         else if(payload.includes('exited-normally') || payload.includes('exited')) {
@@ -215,19 +214,7 @@ export class DebugCPP extends DebugSession {
             await this.gdb.sendCommand(`-file-exec-and-symbols "${norProPath}"`); // 指定要调试的可执行文件路径
             await this.gdb.sendCommand(`-gdb-set mi-async on`); // 启用GDB/MI的异步模式
             await this.gdb.sendCommand(`-environment-cd "${norProCwd}"`); // 设置工作目录
-            // await this.gdb.sendCommand(`-break-insert main`);
 
-            // true则在main函数暂停
-            // if (args.stopOnEntry) {
-            //     await this.gdb.sendCommand(`-exec-run --start`); 
-            // }
-            // else {
-            //     await this.gdb.sendCommand(`-exec-run`);
-            // }
-            // 如果不想在main停止，直接把else分支内容输出,同时把上面给insert-main指令语句注释
-            await this.gdb.sendCommand(`-exec-run`);
-
-            this.sendEvent(new OutputEvent(`[Launch] GBD-MI 启动成功, 路径为: ${this.programPath}\n`));
             this.sendResponse(response);
         } catch(err) {
             this.sendEvent(new OutputEvent(`[Launch Error] ${err}\n`));
@@ -246,7 +233,6 @@ export class DebugCPP extends DebugSession {
 
     // 接下来实现map
     // DAP <--> GDB-MI
-
     // 线程管理
     protected async threadsRequest(response: DebugProtocol.ThreadsResponse): Promise<void> {
         try {
@@ -310,29 +296,35 @@ export class DebugCPP extends DebugSession {
 
         // 每次setBreakpoints都是完整替换source的断点列表,
         // 先删除之前该source的所有断点，否则命令行与可视化不同步xd
-        // const pre = this.breakpoints.get(source) || [];
-        // const gdbIdDelete = pre.map(t => t.id).filter(id => id !== undefined) as number[];
-        // if(gdbIdDelete.length > 0) {
-        //     await this.gdb.sendCommand(`-break-delete ${gdbIdDelete.join(' ')}`);
-        // }
+        const pre = this.breakpoints.get(source) || [];
+        const gdbIdDelete = pre.map(t => t.id).filter(id => id !== undefined) as number[];
+        if(gdbIdDelete.length > 0) {
+            await this.gdb.sendCommand(`-break-delete ${gdbIdDelete.join(' ')}`);
+        }
 
         this.breakpoints.set(source, []);
         const outbps : DebugProtocol.Breakpoint[] = [];
         for(const bp of args.breakpoints || []) {
             try {
                 const line = bp.line;
-                await this.gdb.sendCommand(`-break-insert ${line}`);
+                const insertcmd = `-break-insert "${source}:${line}"`;
+                const raw: any = await this.gdb.sendCommand(insertcmd);
+                const mat = (raw.raw || '').match(/number="([^"]+)"/);
+                const gdbId = mat ? parseInt(mat[1], 10) : undefined;
 
-                this.breakpoints.get(source)!.push({line});
+                this.breakpoints.get(source)!.push({
+                    line: line,
+                    id: gdbId
+                });
                 outbps.push({
                     verified: true,
-                    line: line,
+                    line: line
                 } as DebugProtocol.Breakpoint);
             } catch(err) {
                 outbps.push({
                     verified: false,
-                    line: bp.line,
-                } as DebugProtocol.Breakpoint)
+                    line: bp.line
+                } as DebugProtocol.Breakpoint);
             }
         }
         response.body = {breakpoints: outbps};
@@ -342,6 +334,7 @@ export class DebugCPP extends DebugSession {
     protected async configurationDoneRequest(response: DebugProtocol.ConfigurationDoneResponse): Promise<void> {
         try {
             await this.gdb.sendCommand(`-exec-run`);
+            this.sendEvent(new OutputEvent(`[Launch] GBD-MI 启动成功, 路径为: ${this.programPath}\n`));
             this.sendResponse(response);
         } catch (err:any) {
             this.sendEvent(new OutputEvent(`[run error] ${err.message}\n`));
@@ -385,32 +378,6 @@ export class DebugCPP extends DebugSession {
             this.sendResponse(response);
         }
     }
-    // 查看变量
-    protected async variablesRequest(response: DebugProtocol.VariablesResponse): Promise<void> {
-        
-        try {
-            const raw: any = await this.gdb.sendCommand(`-stack-list-variables --all-values`);
-            const txt = raw.raw;
-            const vars: DebugProtocol.Variable[] = [];
-
-            const varRe = /name="([^"]+)",value="([^"]*)"/g;
-            let match;
-            while ((match = varRe.exec(txt)) !== null) {
-                vars.push({
-                    name: match[1],
-                    value: match[2] || '(unavailable)',
-                    variablesReference: 0
-                });
-            }
-
-            response.body = { variables: vars };
-            this.sendResponse(response);
-        } catch (err: any) {
-            this.sendEvent(new OutputEvent(`[variables error] ${err.message}\n`));
-            response.body = { variables: [] };
-            this.sendResponse(response);
-        }
-    }
     // 查看堆栈
     protected async stackTraceRequest(response: DebugProtocol.StackTraceResponse): Promise<void> {
         
@@ -437,12 +404,96 @@ export class DebugCPP extends DebugSession {
                     column: 1
                 } as DebugProtocol.StackFrame);
             }
+            // 存储栈帧
+            const tid = this.currThreadId || 1;
+            this.frameByThread.set(tid, frames);
+            if(!this.currFrameByThread.has(tid)) {
+                this.currFrameByThread.set(tid, 0);
+            }
             response.body = {stackFrames: frames, totalFrames: frames.length};
             this.sendResponse(response);
         } catch(err:any) {
             this.sendEvent(new OutputEvent(`[stackTrace error] ${err.message}\n`));
             response.body = { stackFrames: [], totalFrames: 0 };
             this.sendResponse(response);
+        }
+    }
+    // 处理作用域
+    protected async scopesRequest(
+        response: DebugProtocol.ScopesResponse,
+        args: DebugProtocol.ScopesArguments): Promise<void> {
+        try {
+            const frameId = args.frameId;
+            const localsRef = this.nextVarRef ++;
+            this.varRefMap.set(localsRef, {
+                type: 'locals',
+                frameIndex: frameId,
+                threadId: this.currThreadId
+            });
+            const globalsRef = this.nextVarRef ++;
+            this.varRefMap.set(globalsRef, {
+                type: 'globals'
+            });
+
+            response.body = {
+                scopes: [
+                    { name: 'Locals', variablesReference: localsRef, expensive: false },
+                    { name: 'Globals', variablesReference: globalsRef, expensive: true }
+                ]
+            };
+            this.sendResponse(response);
+        } catch (err: any) {
+            this.sendEvent(new OutputEvent(`[scopes error] ${err.message}\n`));
+            response.body = {scopes: [] };
+            this.sendResponse(response);
+        }
+    }
+    // 查看变量
+    protected async variablesRequest(
+        response: DebugProtocol.VariablesResponse,
+        args: DebugProtocol.VariablesArguments): Promise<void> {
+        try {
+            const vref = args.variablesReference;
+            if(!this.varRefMap.has(vref)) {
+                response.body = { variables: [] };
+                this.sendResponse(response);
+                return;
+            }
+            const meta = this.varRefMap.get(vref)!;
+            const vars : DebugProtocol.Variable[] = [];
+
+            if(meta.type === 'globals') {
+                const rawAny : any = await this.gdb.sendCommand(`-var-list-children --all-values`);
+                const txt = rawAny.raw || '';
+                const varRe = /name="([^"]+)",value="([^"]*)"/g;
+                let match;
+                while ((match = varRe.exec(txt)) !== null) {
+                    vars.push({
+                        name: match[1],
+                        value: match[2] || '(unavailable)',
+                        variablesReference: 0
+                    });
+                }
+            }
+            else if (meta.type === 'locals') {
+                const frameIndex = meta.frameIndex || 0;
+                const rawAny: any = await this.gdb.sendCommand(`-stack-list-variables --all-values --frame ${frameIndex}`);
+                const txt = rawAny.raw || '';
+                const varRe = /name="([^"]+)",value="([^"]*)"/g;
+                let match;
+                while ((match = varRe.exec(txt)) !== null) {
+                    vars.push({
+                        name: match[1],
+                        value: match[2] || '(unavailable)',
+                        variablesReference: 0
+                    });
+                }
+            }
+            response.body = { variables: vars };
+            this.sendResponse(response);
+        } catch(err : any) {
+            this.sendEvent(new OutputEvent(`[variables error] ${err.message}\n`));
+            response.body = {variables: []};
         }
     }
 }
