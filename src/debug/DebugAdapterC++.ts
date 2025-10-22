@@ -222,7 +222,7 @@ export class DebugCPP extends DebugSession {
             await this.gdb.sendCommand(`-file-exec-and-symbols "${norProPath}"`); // 指定要调试的可执行文件路径
             await this.gdb.sendCommand(`-gdb-set mi-async on`); // 启用GDB/MI的异步模式
             await this.gdb.sendCommand(`-environment-cd "${norProCwd}"`); // 设置工作目录
-
+    
             this.sendResponse(response);
         } catch(err) {
             this.sendEvent(new OutputEvent(`[Launch Error] ${err}\n`));
@@ -473,7 +473,8 @@ export class DebugCPP extends DebugSession {
             if(meta.type === 'globals') {
                 const rawAny : any = await this.gdb.sendCommand(`-var-list-children --all-values`);
                 const txt = rawAny.raw || '';
-                const varRe = /name="([^"]+)",value="([^"]*)"/g;
+                const varRe = /\b([A-Za-z_][A-Za-z0-9_]*)\s*;/g;
+
                 let match;
                 while ((match = varRe.exec(txt)) !== null) {
                     vars.push({
@@ -485,9 +486,11 @@ export class DebugCPP extends DebugSession {
             }
             else if (meta.type === 'locals') {
                 const frameIndex = meta.frameIndex || 0;
-                const rawAny: any = await this.gdb.sendCommand(`-stack-list-variables --all-values --frame ${frameIndex}`);
+                await this.gdb.sendCommand(`-stack-select-frame ${frameIndex}`);
+                const rawAny: any = await this.gdb.sendCommand(`-stack-list-variables --all-values`);
                 const txt = rawAny.raw || '';
                 const varRe = /name="([^"]+)",value="([^"]*)"/g;
+
                 let match;
                 while ((match = varRe.exec(txt)) !== null) {
                     vars.push({

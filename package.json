@@ -40,7 +40,7 @@
       },
       {
         "command": "xq.debug",
-        "title": "GDB命令行调试"
+        "title": "GDB调试"
       }
     ],
     "keybindings": [
