@@ -63,11 +63,19 @@ class GDBController {
             if (s.startsWith('"') && s.endsWith('"')) {
                 try { s = JSON.parse(s); } catch {}
             }
+            // 转义后utg-8编码输出
+            s = s.replace(/\\([0-7]{3})/g, (_, oct) => {
+                const code = parseInt(oct, 8);
+                return String.fromCharCode(code);
+            });
+            if (typeof Buffer !== 'undefined') {
+                s = Buffer.from(s, 'binary').toString('utf8');
+            }
             this.onCallBack?.('stream', s);
-        }
-        else {
-            this.onCallBack?.('unknown', line);
-        }
+            }
+            else {
+                this.onCallBack?.('unknown', line);
+            }
     } 
 
     start(cwd?: string) {
