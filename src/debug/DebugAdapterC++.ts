@@ -99,11 +99,14 @@ class GDBController {
         this.process.stdout?.on('data', (d : Buffer) => this.onData(d.toString()));
         this.process.stderr?.on('data', (d : Buffer) => this.onData('(stderr)' + d.toString()));
         this.process.on('exit', () => {
-            for(const [, val] of this.pending) {
+            for (const [, val] of this.pending) {
                 clearTimeout(val.timeout);
                 val.reject(new Error(`GDB已退出`));
             }
             this.pending.clear();
+            this.process?.stdout?.removeAllListeners();
+            this.process?.stderr?.removeAllListeners();
+            this.process = undefined;
         });
     }
 
@@ -149,6 +152,7 @@ export class DebugCPP extends DebugSession {
     private gdb = new GDBController();
     private cwd = '';
     private programPath = '';
+    private stopAtEntry = false;
     private breakpoints = new Map<string, Array<{ line: number, id?: number }>>();
 
     // 进程管理
@@ -186,6 +190,7 @@ export class DebugCPP extends DebugSession {
         try {
             this.programPath = args.program;
             this.cwd = args.cwd || path.dirname(this.programPath);
+            this.stopAtEntry = Boolean(args.stopAtEntry);
 
             if (!this.programPath || !fs.existsSync(this.programPath)) {
                 this.sendEvent(new OutputEvent(`未找到可执行文件: ${this.programPath}\n`));
@@ -207,10 +212,36 @@ export class DebugCPP extends DebugSession {
                             const tidm = payload.match(/thread-id="([^"]+)"/);
                             const tid = tidm ? parseInt(tidm[1], 10) : 1;
                             this.currThreadId = tid;
-                            this.sendEvent(new StoppedEvent('breakpoint', tid));
-                        }
-                        else if(payload.includes('exited-normally') || payload.includes('exited')) {
-                            this.sendEvent(new TerminatedEvent());
+
+                            const reasonMatch = payload.match(/reason="([^"]+)"/);
+                            const reasonRaw = reasonMatch ? reasonMatch[1] : '';
+                            let reason: string;
+
+                            switch(reasonRaw) {
+                                case 'breakpoint-hit':
+                                    reason = 'breakpoint';
+                                    break;
+                                case 'end-stepping-range':
+                                case 'function-finished':
+                                case 'step':
+                                    reason = 'step';
+                                    break;
+                                case 'signal-received':
+                                case 'exception-received':
+                                    reason = 'exception';
+                                    break;
+                                case 'watchpoint-trigger':
+                                    reason = 'data breakpoint';
+                                    break;
+                                case 'exited-normally':
+                                case 'exited':
+                                    reason = 'pause';
+                                    break;
+                                default:
+                                    reason = 'pause';
+                                    break;
+                            }
+                            this.sendEvent(new StoppedEvent(reason, tid));
                         }
                         break;
                     case 'notify':
@@ -363,7 +394,9 @@ export class DebugCPP extends DebugSession {
     protected async configurationDoneRequest(response: DebugProtocol.ConfigurationDoneResponse): Promise<void> {
         try {
             await this.gdb.sendCommand(`-exec-run`);
-            this.sendEvent(new OutputEvent(`[Launch] GBD-MI 启动成功, 路径为: ${this.programPath}\n`));
+            const runCmd = this.stopAtEntry ? `-exec-run --start` : `-exec-run`;
+            await this.gdb.sendCommand(runCmd);
+            this.sendEvent(new OutputEvent(`[Launch] GBD-MI 启动成功, 路径：${this.programPath}\n`));
             this.sendResponse(response);
         } catch (err:any) {
             this.sendEvent(new OutputEvent(`[run error] ${err.message}\n`));
@@ -492,17 +525,34 @@ export class DebugCPP extends DebugSession {
             const vars : DebugProtocol.Variable[] = [];
 
             if(meta.type === 'globals') {
-                const rawAny : any = await this.gdb.sendCommand(`-var-list-children --all-values`);
-                const txt = rawAny.raw || '';
-                const varRe = /\b([A-Za-z_][A-Za-z0-9_]*)\s*;/g;
+                let handle: string | undefined;
+                try {
+                    const createRaw: any = await this.gdb.sendCommand(`-var-create - --frame 0 *@`);
+                    const createBody = createRaw.raw || '';
+                    const handleMatch = createBody.match(/name="([^"]+)"/);
+                    handle = handleMatch ? handleMatch[1] : undefined;
+                    if(!handle) {
+                        throw new Error('failed to create global scope handle');
+                    }
 
-                let match;
-                while ((match = varRe.exec(txt)) !== null) {
-                    vars.push({
-                        name: match[1],
-                        value: match[2] || '(unavailable)',
-                        variablesReference: 0
-                    });
+                    const listRaw: any = await this.gdb.sendCommand(`-var-list-children --all-values ${handle}`);
+                    const listBody = listRaw.raw || '';
+                    const childRe = /child=\{name="([^"]+)",exp="([^"]+)",value="([^"]*)"/g;
+
+                    let child;
+                    while((child = childRe.exec(listBody)) !== null) {
+                        const name = child[2] || child[1];
+                        const value = child[3] || '(unavailable)';
+                        vars.push({
+                            name: name,
+                            value: value,
+                            variablesReference: 0
+                        });
+                    }
+                } finally {
+                    if(handle) {
+                        await this.gdb.sendCommand(`-var-delete ${handle}`);
+                    }
                 }
             }
             else if (meta.type === 'locals') {
@@ -526,6 +576,7 @@ export class DebugCPP extends DebugSession {
         } catch(err : any) {
             this.sendEvent(new OutputEvent(`[variables error] ${err.message}\n`));
             response.body = {variables: []};
+            this.sendResponse(response);
         }
     }
 }
