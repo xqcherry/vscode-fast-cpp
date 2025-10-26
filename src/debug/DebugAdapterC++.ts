@@ -217,6 +217,9 @@ export class DebugCPP extends DebugSession {
                         if(payload.startsWith('thread-created')) {
                             const idm = payload.match(/id="([^"]+)"/);
                             const tid = idm ? parseInt(idm[1], 10) : this.nextThreadId ++;
+                            const nameMatch = payload.match(/name="([^"]+)"/);
+                            const name = nameMatch ? nameMatch[1] : `Thread ${tid}`;
+                            this.threads.set(tid, {id: tid, name});
                             this.sendEvent(new ThreadEvent('started', tid));
                         }
                         else if(payload.startsWith('thread-exited')) {
