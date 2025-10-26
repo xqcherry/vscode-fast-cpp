@@ -329,9 +329,13 @@ export class DebugCPP extends DebugSession {
                 const line = bp.line;
                 const insertcmd = `-break-insert "${norProsource}:${line}"`;
                 const raw: any = await this.gdb.sendCommand(insertcmd);
-                const mat = (raw.raw || '').match(/number="([^"]+)"/);
+                const body = raw.raw || '';
+                if(!body.startsWith('done')) {
+                    throw new Error(body);
+                }
+                const mat = body.match(/number="([^"]+)"/);
                 const gdbId = mat ? parseInt(mat[1], 10) : undefined;
-
+                
                 this.breakpoints.get(source)!.push({
                     line: line,
                     id: gdbId
@@ -341,6 +345,8 @@ export class DebugCPP extends DebugSession {
                     line: line
                 } as DebugProtocol.Breakpoint);
             } catch(err) {
+                const message = String(err);
+                this.sendEvent(new OutputEvent(`[breakpoint error] ${message}\n`));
                 outbps.push({
                     verified: false,
                     line: bp.line
