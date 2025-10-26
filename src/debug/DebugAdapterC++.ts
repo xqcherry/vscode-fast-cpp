@@ -108,6 +108,9 @@ class GDBController {
             this.process?.stderr?.removeAllListeners();
             this.process = undefined;
         });
+        this.process.on('error', err => {
+            this.onCallBack?.('console', `[gdb spawn error] ${err.message}`);
+        });
     }
 
     stop() {
@@ -264,10 +267,10 @@ export class DebugCPP extends DebugSession {
                         break;
                 }
             });
+            await this.gdb.sendCommand(`-gdb-set target-async on`, 12000); // ensure async mode is enabled before running the target
             // 初始会话,自动编译当前文件
-            await this.gdb.sendCommand(`-file-exec-and-symbols "${norProPath}"`); // 指定要调试的可执行文件路径
-            await this.gdb.sendCommand(`-gdb-set mi-async on`); // 启用GDB/MI的异步模式
-            await this.gdb.sendCommand(`-environment-cd "${norProCwd}"`); // 设置工作目录
+            await this.gdb.sendCommand(`-file-exec-and-symbols "${norProPath}"`, 12000); // 指定要调试的可执行文件路径
+            await this.gdb.sendCommand(`-environment-cd "${norProCwd}"`, 12000); // 设置工作目录
     
             this.sendResponse(response);
         } catch(err) {
@@ -393,7 +396,6 @@ export class DebugCPP extends DebugSession {
     // 启动调试
     protected async configurationDoneRequest(response: DebugProtocol.ConfigurationDoneResponse): Promise<void> {
         try {
-            await this.gdb.sendCommand(`-exec-run`);
             const runCmd = this.stopAtEntry ? `-exec-run --start` : `-exec-run`;
             await this.gdb.sendCommand(runCmd);
             this.sendEvent(new OutputEvent(`[Launch] GBD-MI 启动成功, 路径：${this.programPath}\n`));
@@ -524,38 +526,38 @@ export class DebugCPP extends DebugSession {
             const meta = this.varRefMap.get(vref)!;
             const vars : DebugProtocol.Variable[] = [];
 
-            if(meta.type === 'globals') {
-                let handle: string | undefined;
-                try {
-                    const createRaw: any = await this.gdb.sendCommand(`-var-create - --frame 0 *@`);
-                    const createBody = createRaw.raw || '';
-                    const handleMatch = createBody.match(/name="([^"]+)"/);
-                    handle = handleMatch ? handleMatch[1] : undefined;
-                    if(!handle) {
-                        throw new Error('failed to create global scope handle');
-                    }
+            // if(meta.type === 'globals') {
+            //     let handle: string | undefined;
+            //     try {
+            //         const createRaw: any = await this.gdb.sendCommand(`-var-create - --frame 0 *@`);
+            //         const createBody = createRaw.raw || '';
+            //         const handleMatch = createBody.match(/name="([^"]+)"/);
+            //         handle = handleMatch ? handleMatch[1] : undefined;
+            //         if(!handle) {
+            //             throw new Error('failed to create global scope handle');
+            //         }
 
-                    const listRaw: any = await this.gdb.sendCommand(`-var-list-children --all-values ${handle}`);
-                    const listBody = listRaw.raw || '';
-                    const childRe = /child=\{name="([^"]+)",exp="([^"]+)",value="([^"]*)"/g;
+            //         const listRaw: any = await this.gdb.sendCommand(`-var-list-children --all-values ${handle}`);
+            //         const listBody = listRaw.raw || '';
+            //         const childRe = /child=\{name="([^"]+)",exp="([^"]+)",value="([^"]*)"/g;
 
-                    let child;
-                    while((child = childRe.exec(listBody)) !== null) {
-                        const name = child[2] || child[1];
-                        const value = child[3] || '(unavailable)';
-                        vars.push({
-                            name: name,
-                            value: value,
-                            variablesReference: 0
-                        });
-                    }
-                } finally {
-                    if(handle) {
-                        await this.gdb.sendCommand(`-var-delete ${handle}`);
-                    }
-                }
-            }
-            else if (meta.type === 'locals') {
+            //         let child;
+            //         while((child = childRe.exec(listBody)) !== null) {
+            //             const name = child[2] || child[1];
+            //             const value = child[3] || '(unavailable)';
+            //             vars.push({
+            //                 name: name,
+            //                 value: value,
+            //                 variablesReference: 0
+            //             });
+            //         }
+            //     } finally {
+            //         if(handle) {
+            //             await this.gdb.sendCommand(`-var-delete ${handle}`);
+            //         }
+            //     }
+            // }
+            if (meta.type === 'locals') {
                 const frameIndex = meta.frameIndex || 0;
                 await this.gdb.sendCommand(`-stack-select-frame ${frameIndex}`);
                 const rawAny: any = await this.gdb.sendCommand(`-stack-list-variables --all-values`);
@@ -580,3 +582,5 @@ export class DebugCPP extends DebugSession {
         }
     }
 }
+
+
