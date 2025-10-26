@@ -43,10 +43,22 @@ class GDBController {
             if(token !== null && this.pending.has(token)) {
                 const p = this.pending.get(token)!;
                 clearTimeout(p.timeout);
-                p.resolve({
-                    raw: rest
-                });
                 this.pending.delete(token);
+                if(rest.startsWith('done')) {
+                    p.resolve({
+                        raw: rest
+                    });
+                }
+                else if(rest.startsWith('error')) {
+                    const msgMatch = rest.match(/msg="([^"]*)"/);
+                    const message = msgMatch ? msgMatch[1] : rest;
+                    p.reject(new Error(message));
+                }
+                else {
+                    p.resolve({
+                        raw: rest
+                    });
+                }
             }
             else {
                 this.onCallBack?.('response', rest);
