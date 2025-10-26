@@ -168,7 +168,7 @@ export class DebugCPP extends DebugSession {
     // 变量引用管理
     private nextVarRef = 1;
     private varRefMap = new Map<number, {
-        type: 'locals' | 'globals',
+        type: 'locals',
         frameIndex?: number,
         threadId?: number
     }>();
@@ -267,7 +267,7 @@ export class DebugCPP extends DebugSession {
                         break;
                 }
             });
-            await this.gdb.sendCommand(`-gdb-set target-async on`, 12000); // ensure async mode is enabled before running the target
+            await this.gdb.sendCommand(`-gdb-set target-async on`, 12000);
             // 初始会话,自动编译当前文件
             await this.gdb.sendCommand(`-file-exec-and-symbols "${norProPath}"`, 12000); // 指定要调试的可执行文件路径
             await this.gdb.sendCommand(`-environment-cd "${norProCwd}"`, 12000); // 设置工作目录
@@ -494,15 +494,10 @@ export class DebugCPP extends DebugSession {
                 frameIndex: frameId,
                 threadId: this.currThreadId
             });
-            const globalsRef = this.nextVarRef ++;
-            this.varRefMap.set(globalsRef, {
-                type: 'globals'
-            });
 
             response.body = {
                 scopes: [
-                    { name: 'Locals', variablesReference: localsRef, expensive: false },
-                    { name: 'Globals', variablesReference: globalsRef, expensive: true }
+                    { name: 'Locals', variablesReference: localsRef, expensive: false }
                 ]
             };
             this.sendResponse(response);
@@ -526,37 +521,6 @@ export class DebugCPP extends DebugSession {
             const meta = this.varRefMap.get(vref)!;
             const vars : DebugProtocol.Variable[] = [];
 
-            // if(meta.type === 'globals') {
-            //     let handle: string | undefined;
-            //     try {
-            //         const createRaw: any = await this.gdb.sendCommand(`-var-create - --frame 0 *@`);
-            //         const createBody = createRaw.raw || '';
-            //         const handleMatch = createBody.match(/name="([^"]+)"/);
-            //         handle = handleMatch ? handleMatch[1] : undefined;
-            //         if(!handle) {
-            //             throw new Error('failed to create global scope handle');
-            //         }
-
-            //         const listRaw: any = await this.gdb.sendCommand(`-var-list-children --all-values ${handle}`);
-            //         const listBody = listRaw.raw || '';
-            //         const childRe = /child=\{name="([^"]+)",exp="([^"]+)",value="([^"]*)"/g;
-
-            //         let child;
-            //         while((child = childRe.exec(listBody)) !== null) {
-            //             const name = child[2] || child[1];
-            //             const value = child[3] || '(unavailable)';
-            //             vars.push({
-            //                 name: name,
-            //                 value: value,
-            //                 variablesReference: 0
-            //             });
-            //         }
-            //     } finally {
-            //         if(handle) {
-            //             await this.gdb.sendCommand(`-var-delete ${handle}`);
-            //         }
-            //     }
-            // }
             if (meta.type === 'locals') {
                 const frameIndex = meta.frameIndex || 0;
                 await this.gdb.sendCommand(`-stack-select-frame ${frameIndex}`);
