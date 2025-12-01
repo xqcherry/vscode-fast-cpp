@@ -2,7 +2,7 @@
   "name": "vscode-fast-cpp",
   "displayName": "vscode-fast-cpp",
   "description": "fast open a cpp code without download others!",
-  "version": "0.0.3",
+  "version": "0.1.0",
   "engines": {
     "vscode": "^1.104.0"
   },
@@ -26,6 +26,11 @@
           "type": "string",
           "default": "",
           "description": "g++ 绝对路径（插件自动填充）"
+        },
+        "maomao.debugInputFile": {
+          "type": "string",
+          "default": "",
+          "description": "Path to a file redirected to program stdin while debugging (leave empty to disable). 调试时用于标准输入重定向的文件路径，留空表示不启用。"
         }
       }
     },
@@ -40,7 +45,7 @@
       },
       {
         "command": "xq.debug",
-        "title": "debug C++"
+        "title": "GDB调试"
       }
     ],
     "keybindings": [
@@ -103,6 +108,10 @@
                 "type": "boolean",
                 "default": true,
                 "description": "是否在程序入口处停止"
+              },
+              "stdinFile": {
+                "type": "string",
+                "description": "Path to a text file forwarded to the debuggee via stdin. 调试时将该文本文件内容重定向到标准输入。"
               }
             }
           }
@@ -112,9 +121,10 @@
             "name": "C++ Debugger",
             "type": "xq_cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/xq.exe",
+            "program": "${workspaceFolder}/a.exe",
             "cwd": "${workspaceFolder}",
-            "stopAtEntry": true
+            "stopAtEntry": true,
+            "stdinFile": "${workspaceFolder}/input.txt"
           }
         ]
       }

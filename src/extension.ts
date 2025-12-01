@@ -5,60 +5,62 @@ import * as fs from 'fs';
 import { ensureMinGW } from './mingw';
 import { DebugCPP } from './debug/DebugAdapterC++';
 
+// 可调用的编译函数
+async function compileFile(gpp: string): Promise<string | null> {
+	const editor = vscode.window.activeTextEditor;
+	if(!editor) return null;
+
+	const doc = editor.document;
+	if(doc.languageId !== 'cpp' && doc.languageId !== 'c') return null;
+
+	vscode.window.showInformationMessage(`启动compile!`);
+	const src = doc.fileName;
+	const exe = src.replace(/\.(cpp|c)$/, '.exe');
+
+	try {
+		const args = ['-g', '-O0', '-Wall', '-Wl,--disable-dynamicbase', src, '-o', exe];
+		console.log(`[compile] g++ ${args.join(' ')}`);
+		console.log('是否存在：', fs.existsSync(gpp));
+		console.log('是否存在：', fs.existsSync(src));
+
+		if (!fs.existsSync(gpp)) {
+			vscode.window.showErrorMessage('编译失败: g++ 路径异常, 请查看' + gpp);
+			return null;
+		}
+		if (!fs.existsSync(src)) {
+			vscode.window.showErrorMessage('编译失败:本地文件路径异常，请查看' + src);
+			return null;
+		}
+
+        cp.execFileSync(gpp, args, {
+            cwd: path.dirname(src),
+            encoding: 'utf8',
+        });
+
+		vscode.window.showInformationMessage(`编译成功：${path.basename(exe)}`);
+        return exe;
+	} catch (err: any) {
+        console.error('[g++ stderr]\n' + (err.stderr?.toString() || err.message));
+        vscode.window.showErrorMessage('编译失败，请查看“输出”面板');
+        return null;
+    }
+}
+
 export async function activate(context: vscode.ExtensionContext) {
 	const gpp = await ensureMinGW(context);
 	console.log('[MinGW] g++:', gpp);
 
-	// 编译命令
-	const compile = vscode.commands.registerCommand('maomao.compile', async () => {
-		console.log('[compile] 命令被触发');
-		const editor = vscode.window.activeTextEditor;
-		if (!editor) return;
-		const doc = editor.document;
-		if (doc.languageId !== 'cpp' && doc.languageId !== 'c') return;
-		vscode.window.showInformationMessage(`启动compile！`);
-		const src = doc.fileName;
-		const exe = src.replace(/\.(cpp|c)$/, '.exe');
+	const compile = vscode.commands.registerCommand('maomao.compile', async() => {
+		const exe = await compileFile(gpp);
+		if(!exe) return ;
 
-		try {
-			const args = ['-static', '-static-libgcc', '-static-libstdc++', src, '-o', exe];
-			console.log('是否存在：', fs.existsSync(gpp));
-			console.log(`Executing: g++ ${args.join(' ')}`);
-			console.log('是否存在：', fs.existsSync(src));
-			if (!fs.existsSync(gpp)) {
-				vscode.window.showErrorMessage('编译失败:g++路径异常，请查看' + gpp);
-				return;
-			}
-			if (!fs.existsSync(src)) {
-				vscode.window.showErrorMessage('编译失败:本地文件路径异常，请查看' + src);
-				return;
-			}
-			try {
-				// 改为静默编译，结果只通过管道捕获
-				const out = cp.execFileSync(gpp, args, { cwd: path.dirname(src), encoding: 'utf8' });
-				if (out) console.log('[g++ stdout]\n' + out);
-			} catch (err: any) {
-				// 关键：把 g++ 的原始报错打到 VS Code Output 面板
-				console.error('[g++ stderr]\n' + (err.stderr?.toString() || err.stdout?.toString() || err.message));
-				vscode.window.showErrorMessage('编译失败，请查看“输出”面板');
-				return;
-			}
+		const terminalName = 'MinGW Run';
+		let terminal = vscode.window.terminals.find(t => t.name === terminalName);
+		if(!terminal) terminal = vscode.window.createTerminal(terminalName);
 
-			vscode.window.showInformationMessage(`编译成功：${path.basename(exe)}`);
-
-			const terminalName = 'MinGW Run';
-			let terminal = vscode.window.terminals.find(t => t.name === terminalName);
-
-			if (!terminal) {
-				terminal = vscode.window.createTerminal(terminalName);
-			}
-
-			terminal.show();
-			terminal.sendText(`cmd /c start /wait cmd /c ""${exe}" & pause"`);
-		} catch (e: any) {
-			vscode.window.showErrorMessage('编译失败：' + e.message);
-		}
-	});
+		terminal.show();
+		terminal.sendText(`cmd /c start /wait cmd /c ""${exe}" & pause"`);
+	});	
 	
 	// hello命令
 	const hello = vscode.commands.registerCommand('maomao.hello', async () => {
@@ -77,19 +79,12 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	// debug命令
 	const debug = vscode.commands.registerCommand('xq.debug', async() => {
-		const editor = vscode.window.activeTextEditor;
-		if(!editor) return ;
-
-		const exe = editor.document.fileName.replace(/\.(cpp|c)$/, '.exe');
-		const cwd = path.dirname(editor.document.fileName);
-
-		if (!fs.existsSync(exe)) {
-        	vscode.window.showErrorMessage('请先编译项目再调试');
-        	return;
-    	}
-
+		const exe = await compileFile(gpp);
+		if(!exe) return ;
+		
+		const cwd = path.dirname(exe);
 		const config: vscode.DebugConfiguration = {
-			type: 'cppdbg',
+			type: 'xq_cppdbg',
         	name: 'C++ Debugger',
         	request: 'launch',
         	program: exe,
