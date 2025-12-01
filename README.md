@@ -1,41 +1,79 @@
 # vscode-fast-cpp
 
-## 项目简介 | Overview
-`vscode-fast-cpp` 是一款面向 Windows 的 VS Code 扩展，帮助开发者在无需手动部署编译环境的情况下快速编译、运行和调试 C/C++ 程序。扩展会在首次启动时自动下载并缓存 MinGW 工具链，提供一键编译命令、内置调试适配器，以及带有中文提示的操作流程，适合教学、竞赛和日常练习场景。
+> 一键获取 MinGW、编译 / 运行 / 调试 C/C++ 的 VS Code 扩展  
+> VS Code extension that boots a ready-to-run MinGW toolchain and debugger for C/C++ on Windows.
 
-## 主要功能 | Features
-- **自动准备 MinGW**：通过 `maomao.gpp` 配置项管理 g++ 路径，缺失时自动下载并解压官方 MinGW 发行版。
-- **一键编译与运行**：`maomao.compile` 命令支持在当前文件目录调用 g++，并以独立终端窗口运行生成的可执行文件。
-- **内联调试适配器**：`xq_cppdbg` Debug Adapter 基于 VS Code Inline API 提供断点调试、入口暂停等能力。
-- **便捷命令和快捷键**：默认绑定 `Ctrl+Shift+B` 编译、`Ctrl+F6` 调试、`Ctrl+F5` 显示问候信息，可在命令面板和编辑器右键菜单中调用。
+## 为什么要用它 | Why It Exists
+- **零配置环境**：首次激活时自动下载官方 MinGW-w64（GCC 14.3），免去手动安装与路径配置。
+- **课堂/竞赛友好**：提供中文提示、默认快捷键和一键命令，帮助初学者聚焦代码本身。
+- **内置调试适配器**：自研 `xq_cppdbg` Debug Adapter，直接在 VS Code 内完成断点、单步和变量查看。
 
-## 使用指引 | Getting Started
-1. 在 VS Code 中安装扩展后打开任意 `.cpp` 或 `.c` 文件。
-2. 首次使用会提示下载 MinGW，按通知指引完成安装后即可开始编译。
-3. 使用命令面板或快捷键执行 `maomao.compile` 生成可执行文件，终端窗口会自动弹出并暂停查看输出。
-4. 选择 `xq.debug` 命令触发调试，会在同一路径下先行编译并启动 `xq_cppdbg` 调试会话。
+## 功能速览 | Feature Highlights
+- 自动维护 `maomao.gpp` 指向的 g++ 路径，必要时重用缓存或重新下载。
+- `maomao.compile`：当前 C/C++ 文件一键编译并在独立终端运行，默认 `-g -O0 -Wall`。
+- `xq.debug`：编译后立即通过 `xq_cppdbg` 启动 GDB/MI 调试，支持入口暂停、断点、单步。
+- `maomao.hello`：示例命令，展示通知交互流程。
+- 内置键位：`Ctrl+Shift+B` 编译、`Ctrl+F6` 调试、`Ctrl+F5` Hello；可在命令面板或编辑器右键菜单触发。
+- `editor/context` 菜单集成，选中文件即可快速操作。
 
-### 可配置项
-- `maomao.gpp`：自定义 g++ 绝对路径，若留空将使用扩展缓存的 MinGW 版本。
+## 快速上手 | Quick Start
+1. **安装扩展**：在 VS Code Marketplace 搜索 “vscode-fast-cpp” 或从本仓库构建 VSIX。
+2. **打开源文件**：加载任意 `.cpp` / `.c` 文件即触发扩展激活。
+3. **首次准备 MinGW**：扩展会提示下载并解压 MinGW，等待通知完成即可。
+4. **编译与运行**：执行 `maomao.compile`（命令面板、快捷键或右键）。生成的 `.exe` 会在独立终端启动并 `pause` 等待输入。
+5. **断点调试**：执行 `xq.debug`。扩展会复用上一步编译产物，自动注册 Debug Adapter 并启动调试会话。
 
-## 开发者指南 | Development
-- 源码位于 `src/`，入口 `src/extension.ts`，MinGW 下载逻辑在 `src/mingw.ts`，调试适配器在 `src/debug/`，集成测试在 `src/test/`。
-- 编译流程：`npm install` → `npm run compile`，持续开发可使用 `npm run watch`。
-- 质量检查：运行 `npm run lint` 触发 ESLint；执行 `npm test` 运行 VS Code 集成测试（Mocha）。
-- 推荐在 VS Code 中加载本仓库，使用 “Run Extension” 启动目标进行调试，加速调试适配器迭代。
-
+### 调试配置
+`package.json` 内置 `xq_cppdbg` 调试器，默认 `launch` 配置如下：
+```jsonc
+{
+  "name": "C++ Debugger",
+  "type": "xq_cppdbg",
+  "request": "launch",
+  "program": "${workspaceFolder}/a.exe",
+  "cwd": "${workspaceFolder}",
+  "stopAtEntry": true,
+  "stdinFile": "${workspaceFolder}/input.txt"
+}
 ```
-.
-├─ src/
-│  ├─ extension.ts       # 扩展激活、命令注册与调试入口
-│  ├─ mingw.ts           # MinGW 下载、解压与路径管理
-│  └─ debug/             # C++ Debug Adapter 实现
-├─ src/test/             # 集成测试与夹具
-├─ out/                  # TypeScript 转译产物（自动生成）
-└─ publish.sh            # 打包 VSIX 辅助脚本
-```
+可在 `.vscode/launch.json` 中根据项目自定义 `program`、`cwd` 或输入文件。
 
-## 测试与发布 | Testing & Release
-- 在提交前确保通过 `npm run lint` 与 `npm test`，避免回归。
-- 发布前运行 `npm run compile`，确认 `out/` 产物最新，随后执行 `./publish.sh` 生成 `.vsix` 包或配合 `vsce` 发布到 Marketplace。
-- 建议在 PR 或发布说明中附带关键命令的终端输出或截图，便于审查者快速验证行为。
+### 可配置项 | Settings
+| Setting | 描述 |
+| --- | --- |
+| `maomao.gpp` | g++ 绝对路径；留空时自动写入缓存的 MinGW 可执行文件。 |
+| `maomao.debugInputFile` | 调试阶段重定向到程序标准输入的文本文件路径（空字符串表示禁用）。 |
+
+## 架构概览 | Architecture
+```
+src/
+├─ extension.ts        # VS Code 激活入口、命令注册、终端运行
+├─ mingw.ts            # MinGW 下载、解压、路径拼装与 PATH 注入
+└─ debug/
+   └─ DebugAdapterC++.ts  # 基于 @vscode/debugadapter 的 GDB/MI 内联调试器
+src/test/extension.test.ts # VS Code 集成测试
+out/                    # tsc 产物（自动生成，请勿修改）
+```
+- `ensureMinGW()`：检测 `context.globalStorageUri/mingw/bin/x86_64-w64-mingw32-g++.exe`，缺失则下载 `7z` 包并通过 `7zip-min` 解压，进度通过 VS Code 通知展示。
+- `compileFile()`：在当前编辑器文件上运行 g++，输出路径与源文件同目录，仅替换扩展名为 `.exe`。
+- `DebugCPP`：实现 GDB/MI 命令发送、断点同步、堆栈/变量查询、线程事件映射，借助 `DebugAdapterInlineImplementation` 内嵌到 VS Code。
+
+## 开发指南 | Development Workflow
+1. **安装依赖**：`npm install`
+2. **构建**：`npm run compile`（一次性）或 `npm run watch`（增量）
+3. **代码质量**：`npm run lint`
+4. **测试**：`npm test`（通过 `@vscode/test-electron` 运行集成测试，自动先跑 `compile` + `lint`）
+5. **调试扩展**：在 VS Code 中使用 “Run Extension” 目标，结合 `npm run watch` 获取实时构建输出。
+
+### 发布流程 | Release
+1. 确认 `npm run compile`, `npm run lint`, `npm test` 均通过。
+2. 运行 `./publish.sh` 生成 `.vsix` 包（需 Git Bash / WSL 环境）。
+3. 使用 `vsce` 上传至 Marketplace，或将构建产物分享给用户手动安装。
+4. PR / 发布说明中附上关键命令输出或截图，便于审查验证。
+
+## 贡献 | Contributing
+- 请遵循 TypeScript + ESLint 规则，保持现有缩进与命名约定（`maomao.*` 前缀）。
+- 功能变更若影响编译、调试或文件系统逻辑，应补充/更新 `src/test` 内的集成测试。
+- 提交前确保工作区干净、脚本全部通过；PR 中说明修改点、测试结果及潜在影响。
+
+欢迎提交 issue 或 PR，持续提升 Windows 上的 C/C++ 学习与练习体验！
