@@ -4,7 +4,7 @@ import * as vscode from 'vscode';
 import * as https from 'https';
 import * as sevenZip from '7zip-min';
 
-const MINGW_URL = 'https://files.1f0.de/mingw/mingw-w64-gcc-14.3-stable-r43.7z';
+const WINLIBS_LATEST_RELEASE_API = 'https://api.github.com/repos/brechtsanders/winlibs_mingw/releases/latest';
 
 export interface MinGWToolchain {
     binDir: string;
@@ -28,8 +28,10 @@ export async function ensureMinGW(context: vscode.ExtensionContext): Promise<Min
                 cancellable: false,
             },
             async (progress) => {
-                progress.report({ message: '正在从网络下载 MinGW 包...' });
-                const archiveBuffer = await downloadFileToBuffer(MINGW_URL, progress);
+                progress.report({ message: '正在获取最新 WinLibs 版本信息...' });
+                const downloadUrl = await resolveLatestWinLibsAssetUrl();
+                progress.report({ message: '正在从网络下载 WinLibs 包...' });
+                const archiveBuffer = await downloadFileToBuffer(downloadUrl, progress);
 
                 progress.report({ message: '下载完成，正在解压文件...' });
                 const archivePath = path.join(targetDir, 'mingw.7z');
@@ -60,6 +62,118 @@ export async function ensureMinGW(context: vscode.ExtensionContext): Promise<Min
     process.env.PATH = `${toolchain.binDir}${path.delimiter}${process.env.PATH || ''}`;
 
     return toolchain;
+}
+
+async function resolveLatestWinLibsAssetUrl(): Promise<string> {
+    return new Promise((resolve, reject) => {
+        https
+            .get(
+                WINLIBS_LATEST_RELEASE_API,
+                {
+                    headers: {
+                        'User-Agent': 'vscode-fast-cpp',
+                        'Accept': 'application/vnd.github+json',
+                    },
+                },
+                (res) => {
+                    if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                        resolve(resolveLatestWinLibsAssetUrlFromUrl(res.headers.location));
+                        return;
+                    }
+
+                    if (res.statusCode !== 200) {
+                        reject(new Error(`获取 WinLibs 版本失败，HTTP ${res.statusCode ?? 'unknown'}`));
+                        return;
+                    }
+
+                    const chunks: Buffer[] = [];
+                    res.on('data', (chunk) => chunks.push(chunk as Buffer));
+                    res.on('end', () => {
+                        try {
+                            const json = JSON.parse(Buffer.concat(chunks).toString('utf8')) as {
+                                assets?: Array<{ name?: string; browser_download_url?: string }>;
+                            };
+                            const assets = json.assets || [];
+                            const selected = pickWinLibsAsset(assets);
+                            if (!selected) {
+                                reject(new Error('未找到合适的 WinLibs 下载资源（需要 x86_64 + 7z/zip）'));
+                                return;
+                            }
+                            resolve(selected);
+                        } catch (err: any) {
+                            reject(new Error(`解析 WinLibs 版本信息失败: ${err?.message || String(err)}`));
+                        }
+                    });
+                }
+            )
+            .on('error', (err) => {
+                reject(new Error(`请求 WinLibs 版本信息失败: ${err.message}`));
+            });
+    });
+}
+
+function resolveLatestWinLibsAssetUrlFromUrl(url: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+        https
+            .get(
+                url,
+                {
+                    headers: {
+                        'User-Agent': 'vscode-fast-cpp',
+                        'Accept': 'application/vnd.github+json',
+                    },
+                },
+                (res) => {
+                    if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                        resolve(resolveLatestWinLibsAssetUrlFromUrl(res.headers.location));
+                        return;
+                    }
+
+                    if (res.statusCode !== 200) {
+                        reject(new Error(`获取 WinLibs 版本失败，HTTP ${res.statusCode ?? 'unknown'}`));
+                        return;
+                    }
+
+                    const chunks: Buffer[] = [];
+                    res.on('data', (chunk) => chunks.push(chunk as Buffer));
+                    res.on('end', () => {
+                        try {
+                            const json = JSON.parse(Buffer.concat(chunks).toString('utf8')) as {
+                                assets?: Array<{ name?: string; browser_download_url?: string }>;
+                            };
+                            const assets = json.assets || [];
+                            const selected = pickWinLibsAsset(assets);
+                            if (!selected) {
+                                reject(new Error('未找到合适的 WinLibs 下载资源（需要 x86_64 + 7z/zip）'));
+                                return;
+                            }
+                            resolve(selected);
+                        } catch (err: any) {
+                            reject(new Error(`解析 WinLibs 版本信息失败: ${err?.message || String(err)}`));
+                        }
+                    });
+                }
+            )
+            .on('error', (err) => {
+                reject(new Error(`请求 WinLibs 版本信息失败: ${err.message}`));
+            });
+    });
+}
+
+function pickWinLibsAsset(assets: Array<{ name?: string; browser_download_url?: string }>): string | null {
+    const candidates = assets.filter((asset) => {
+        if (!asset.name || !asset.browser_download_url) {
+            return false;
+        }
+        const lower = asset.name.toLowerCase();
+        if (!lower.includes('winlibs-') || !lower.includes('x86_64') || !lower.includes('posix')) {
+            return false;
+        }
+        return lower.endsWith('.7z') || lower.endsWith('.zip');
+    });
+
+    const preferred = candidates.find((asset) => asset.name!.toLowerCase().endsWith('.7z'));
+    return (preferred || candidates[0])?.browser_download_url || null;
 }
 
 function downloadFileToBuffer(
@@ -147,10 +261,16 @@ function findToolchainInDir(rootDir: string): MinGWToolchain | null {
 }
 
 function makeToolchainFromBinDir(binDir: string): MinGWToolchain | null {
-    const gppPath = path.join(binDir, 'x86_64-w64-mingw32-g++.exe');
-    const gdbPath = path.join(binDir, 'x86_64-w64-mingw32-gdb.exe');
+    const gppPath = pickExistingPath(binDir, [
+        'x86_64-w64-mingw32-g++.exe',
+        'g++.exe',
+    ]);
+    const gdbPath = pickExistingPath(binDir, [
+        'x86_64-w64-mingw32-gdb.exe',
+        'gdb.exe',
+    ]);
 
-    if (!fs.existsSync(gppPath) || !fs.existsSync(gdbPath)) {
+    if (!gppPath || !gdbPath) {
         return null;
     }
 
@@ -159,6 +279,16 @@ function makeToolchainFromBinDir(binDir: string): MinGWToolchain | null {
         gppPath,
         gdbPath,
     };
+}
+
+function pickExistingPath(baseDir: string, candidates: string[]): string | null {
+    for (const name of candidates) {
+        const fullPath = path.join(baseDir, name);
+        if (fs.existsSync(fullPath)) {
+            return fullPath;
+        }
+    }
+    return null;
 }
 
 function safeReadDir(dir: string): fs.Dirent[] {
