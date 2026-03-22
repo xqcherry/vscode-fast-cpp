@@ -3,7 +3,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import { ensureMinGW, MinGWToolchain } from './mingw';
-import { DebugCPP } from './debug/DebugAdapterC++';
+import { DebugCPP } from './DebugAdapterC++';
 
 
 async function compileFile(gppPath: string): Promise<string | null> {
