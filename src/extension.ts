@@ -5,6 +5,19 @@ import * as fs from 'fs';
 import { ensureMinGW, MinGWToolchain } from './mingw';
 import { DebugCPP } from './debug/DebugAdapterC++';
 
+async function syncToolchainToSettings(toolchain: MinGWToolchain): Promise<void> {
+    const config = vscode.workspace.getConfiguration('maomao');
+    const inspectGpp = config.inspect<string>('gpp');
+    const inspectGdb = config.inspect<string>('gdb');
+
+    if (inspectGpp?.globalValue !== toolchain.gppPath) {
+        await config.update('gpp', toolchain.gppPath, vscode.ConfigurationTarget.Global);
+    }
+
+    if (inspectGdb?.globalValue !== toolchain.gdbPath) {
+        await config.update('gdb', toolchain.gdbPath, vscode.ConfigurationTarget.Global);
+    }
+}
 
 async function compileFile(gppPath: string): Promise<string | null> {
     const editor = vscode.window.activeTextEditor;
@@ -54,6 +67,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
     try {
         toolchain = await ensureMinGW(context);
+        await syncToolchainToSettings(toolchain);
     } catch (err: any) {
         vscode.window.showErrorMessage(`MinGW 初始化失败: ${err?.message || String(err)}`);
         return;

@@ -26,6 +26,11 @@
           "type": "string",
           "default": "",
           "description": "g++ 绝对路径（插件自动填充）"
+        },
+        "maomao.gdb": {
+          "type": "string",
+          "default": "",
+          "description": "gdb 绝对路径（插件自动填充）"
         }
       }
     },
