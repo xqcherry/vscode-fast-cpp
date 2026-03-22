@@ -31,6 +31,23 @@
           "type": "string",
           "default": "",
           "description": "gdb 绝对路径（插件自动填充）"
+        },
+        "maomao.downloadProxy.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否启用 GitHub 下载代理前缀自动回退"
+        },
+        "maomao.downloadProxy.prefixes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "https://ghfast.top/",
+            "https://gh-proxy.com/",
+            "https://mirror.ghproxy.com/"
+          ],
+          "description": "下载 WinLibs 时使用的代理前缀列表（按顺序尝试）"
         }
       }
     },
