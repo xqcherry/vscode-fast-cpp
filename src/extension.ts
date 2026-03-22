@@ -5,7 +5,7 @@ import * as fs from 'fs';
 import { ensureMinGW, MinGWToolchain } from './mingw';
 import { DebugCPP } from './debug/DebugAdapterC++';
 
-// 可调用的编译函数
+
 async function compileFile(gppPath: string): Promise<string | null> {
     const editor = vscode.window.activeTextEditor;
     if (!editor) {
@@ -48,6 +48,7 @@ async function compileFile(gppPath: string): Promise<string | null> {
     }
 }
 
+
 export async function activate(context: vscode.ExtensionContext) {
     let toolchain: MinGWToolchain;
 
@@ -81,14 +82,6 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.window.showInformationMessage('你好，测试！');
     });
 
-    context.subscriptions.push(
-        vscode.debug.registerDebugAdapterDescriptorFactory('xq_cppdbg', {
-            createDebugAdapterDescriptor: (_session) => {
-                return new vscode.DebugAdapterInlineImplementation(new DebugCPP(toolchain.gdbPath));
-            },
-        })
-    );
-
     const debug = vscode.commands.registerCommand('xq.debug', async () => {
         const exe = await compileFile(toolchain.gppPath);
         if (!exe) {
@@ -108,6 +101,14 @@ export async function activate(context: vscode.ExtensionContext) {
 
         await vscode.debug.startDebugging(vscode.workspace.workspaceFolders?.[0], config);
     });
+
+    context.subscriptions.push(
+        vscode.debug.registerDebugAdapterDescriptorFactory('xq_cppdbg', {
+            createDebugAdapterDescriptor: (_session) => {
+                return new vscode.DebugAdapterInlineImplementation(new DebugCPP(toolchain.gdbPath));
+            },
+        })
+    );
 
     context.subscriptions.push(compile, hello, debug);
 }
