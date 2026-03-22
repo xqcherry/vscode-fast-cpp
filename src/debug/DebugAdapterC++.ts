@@ -10,216 +10,18 @@ import { DebugProtocol } from '@vscode/debugprotocol';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as child_process from 'child_process';
-
-type MIValue = string | MITuple | MIValue[];
-type MITuple = Record<string, MIValue>;
-
-interface MIRecord {
-    clazz: string;
-    results: MITuple;
-    raw: string;
-}
-
-function parseCString(input: string, start: number): { value: string; next: number } {
-    let i = start;
-    let out = '';
-    if (input[i] !== '"') {
-        throw new Error('invalid c-string start');
-    }
-    i++;
-
-    while (i < input.length) {
-        const ch = input[i];
-        if (ch === '"') {
-            return { value: out, next: i + 1 };
-        }
-        if (ch === '\\') {
-            i++;
-            if (i >= input.length) {
-                break;
-            }
-            const esc = input[i];
-            switch (esc) {
-                case 'n':
-                    out += '\n';
-                    break;
-                case 'r':
-                    out += '\r';
-                    break;
-                case 't':
-                    out += '\t';
-                    break;
-                case '"':
-                    out += '"';
-                    break;
-                case '\\':
-                    out += '\\';
-                    break;
-                default:
-                    out += esc;
-                    break;
-            }
-            i++;
-            continue;
-        }
-        out += ch;
-        i++;
-    }
-
-    throw new Error('unterminated c-string');
-}
-
-function skipComma(input: string, i: number): number {
-    return input[i] === ',' ? i + 1 : i;
-}
-
-function parseIdentifier(input: string, start: number): { ident: string; next: number } {
-    let i = start;
-    let out = '';
-    while (i < input.length) {
-        const ch = input[i];
-        if (/[_a-zA-Z0-9\-]/.test(ch)) {
-            out += ch;
-            i++;
-        } else {
-            break;
-        }
-    }
-    return { ident: out, next: i };
-}
-
-function parseConst(input: string, start: number): { value: string; next: number } {
-    let i = start;
-    let out = '';
-    while (i < input.length) {
-        const ch = input[i];
-        if (ch === ',' || ch === '}' || ch === ']') {
-            break;
-        }
-        out += ch;
-        i++;
-    }
-    return { value: out.trim(), next: i };
-}
-
-function parseValue(input: string, start: number): { value: MIValue; next: number } {
-    const ch = input[start];
-
-    if (ch === '"') {
-        return parseCString(input, start);
-    }
-    if (ch === '{') {
-        return parseTuple(input, start);
-    }
-    if (ch === '[') {
-        return parseList(input, start);
-    }
-    return parseConst(input, start);
-}
-
-function parseTuple(input: string, start: number): { value: MITuple; next: number } {
-    let i = start;
-    const obj: MITuple = {};
-    if (input[i] !== '{') {
-        throw new Error('invalid tuple start');
-    }
-    i++;
-
-    while (i < input.length) {
-        if (input[i] === '}') {
-            return { value: obj, next: i + 1 };
-        }
-
-        const key = parseIdentifier(input, i);
-        i = key.next;
-        if (!key.ident || input[i] !== '=') {
-            const cv = parseConst(input, i);
-            obj[`$${Object.keys(obj).length}`] = cv.value;
-            i = cv.next;
-        } else {
-            i++; // '='
-            const parsed = parseValue(input, i);
-            obj[key.ident] = parsed.value;
-            i = parsed.next;
-        }
-        i = skipComma(input, i);
-    }
-
-    throw new Error('unterminated tuple');
-}
-
-function parseList(input: string, start: number): { value: MIValue[]; next: number } {
-    let i = start;
-    const arr: MIValue[] = [];
-    if (input[i] !== '[') {
-        throw new Error('invalid list start');
-    }
-    i++;
-
-    while (i < input.length) {
-        if (input[i] === ']') {
-            return { value: arr, next: i + 1 };
-        }
-
-        const id = parseIdentifier(input, i);
-        if (id.ident && input[id.next] === '=') {
-            i = id.next + 1;
-            const parsed = parseValue(input, i);
-            arr.push({ [id.ident]: parsed.value } as MITuple);
-            i = parsed.next;
-        } else {
-            const parsed = parseValue(input, i);
-            arr.push(parsed.value);
-            i = parsed.next;
-        }
-
-        i = skipComma(input, i);
-    }
-
-    throw new Error('unterminated list');
-}
-
-function parseMIRecord(rest: string): MIRecord {
-    const firstComma = rest.indexOf(',');
-    if (firstComma === -1) {
-        return { clazz: rest, results: {}, raw: rest };
-    }
-
-    const clazz = rest.slice(0, firstComma);
-    const tail = rest.slice(firstComma + 1);
-
-    const fakeTuple = `{${tail}}`;
-    const parsed = parseTuple(fakeTuple, 0);
-
-    return {
-        clazz,
-        results: parsed.value,
-        raw: rest,
-    };
-}
-
-function asTuple(v: MIValue | undefined): MITuple | undefined {
-    return v && typeof v === 'object' && !Array.isArray(v) ? (v as MITuple) : undefined;
-}
-
-function asArray(v: MIValue | undefined): MIValue[] | undefined {
-    return Array.isArray(v) ? v : undefined;
-}
-
-function asString(v: MIValue | undefined): string | undefined {
-    return typeof v === 'string' ? v : undefined;
-}
+import { asArray, asString, asTuple, MIRecord, MIResultRecord, parseMIOutputLine } from './miParser';
 
 class GDBController {
     private process?: child_process.ChildProcess;
     private buffer = '';
     private token = 1;
     private pending = new Map<number, {
-        resolve: (r: MIRecord) => void;
+        resolve: (r: MIResultRecord) => void;
         reject: (e: Error) => void;
         timeout: NodeJS.Timeout;
     }>();
-    private onCallBack?: (type: string, payload: string | MIRecord) => void;
+    private onCallBack?: (record: MIRecord) => void;
 
     public constructor(private readonly gdbPath: string) {}
 
@@ -237,22 +39,15 @@ class GDBController {
     }
 
     private handleLine(line: string) {
-        const m = line.match(/^(\d+)?(\^|=|\*|~|&|@)(.*)$/s);
-        if (!m) {
-            this.onCallBack?.('console', line);
-            return;
-        }
+        const record = parseMIOutputLine(line);
 
-        const token = m[1] ? parseInt(m[1], 10) : null;
-        const prefix = m[2];
-        const rest = m[3];
-
-        if (prefix === '^') {
-            const record = parseMIRecord(rest);
+        if (record.type === 'result') {
+            const token = record.token;
             if (token !== null && this.pending.has(token)) {
                 const p = this.pending.get(token)!;
                 clearTimeout(p.timeout);
                 this.pending.delete(token);
+
                 if (record.clazz === 'error') {
                     const message = asString(record.results.msg) || record.raw;
                     p.reject(new Error(message));
@@ -260,31 +55,12 @@ class GDBController {
                     p.resolve(record);
                 }
             } else {
-                this.onCallBack?.('response', record);
+                this.onCallBack?.(record);
             }
             return;
         }
 
-        if (prefix === '*' || prefix === '=') {
-            const record = parseMIRecord(rest);
-            this.onCallBack?.(prefix === '*' ? 'async' : 'notify', record);
-            return;
-        }
-
-        if (prefix === '~' || prefix === '&' || prefix === '@') {
-            let s = rest;
-            if (s.startsWith('"')) {
-                try {
-                    s = parseCString(s, 0).value;
-                } catch {
-                    // keep raw
-                }
-            }
-            this.onCallBack?.('stream', s);
-            return;
-        }
-
-        this.onCallBack?.('unknown', line);
+        this.onCallBack?.(record);
     }
 
     start(cwd?: string) {
@@ -297,7 +73,7 @@ class GDBController {
 
         this.process = child_process.spawn(this.gdbPath, ['--interpreter=mi2'], { cwd, shell: false });
         this.process.stdout?.on('data', (d: Buffer) => this.onData(d.toString()));
-        this.process.stderr?.on('data', (d: Buffer) => this.onData(`(stderr)${d.toString()}`));
+        this.process.stderr?.on('data', (d: Buffer) => this.onData(`&"${d.toString().replace(/"/g, '\\"')}"`));
         this.process.on('exit', () => {
             for (const [, val] of this.pending) {
                 clearTimeout(val.timeout);
@@ -324,11 +100,11 @@ class GDBController {
         return Boolean(this.process);
     }
 
-    setCallBack(cb: (type: string, payload: string | MIRecord) => void) {
+    setCallBack(cb: (record: MIRecord) => void) {
         this.onCallBack = cb;
     }
 
-    sendCommand(cmd: string, timeoutMs = 5000): Promise<MIRecord> {
+    sendCommand(cmd: string, timeoutMs = 5000): Promise<MIResultRecord> {
         if (!this.process || !this.process.stdin) {
             return Promise.reject(new Error('GDB 停止运行'));
         }
@@ -394,24 +170,24 @@ export class DebugCPP extends DebugSession {
             const norProCwd = this.cwd.replace(/\\/g, '/');
 
             this.gdb.start(this.cwd);
-            this.gdb.setCallBack((type, payload) => {
-                if (type === 'stream' && typeof payload === 'string') {
-                    this.sendEvent(new OutputEvent(payload));
+            this.gdb.setCallBack((record) => {
+                if (record.type === 'stream') {
+                    this.sendEvent(new OutputEvent(record.text));
                     return;
                 }
 
-                if ((type === 'async' || type === 'notify') && typeof payload !== 'string') {
-                    if (type === 'async' && payload.clazz === 'stopped') {
-                        const tid = parseInt(asString(payload.results['thread-id']) || '1', 10);
+                if (record.type === 'async') {
+                    if (record.clazz === 'stopped') {
+                        const tid = parseInt(asString(record.results['thread-id']) || '1', 10);
                         this.currThreadId = Number.isNaN(tid) ? 1 : tid;
 
-                        const reasonRaw = asString(payload.results.reason) || '';
+                        const reasonRaw = asString(record.results.reason) || '';
                         let reason: 'breakpoint' | 'step' | 'pause' | 'exception' = 'breakpoint';
                         if (reasonRaw === 'end-stepping-range' || reasonRaw === 'function-finished') {
                             reason = 'step';
                         } else if (reasonRaw === 'signal-received') {
                             reason = 'exception';
-                        } else if (reasonRaw === 'signal-received' || reasonRaw === 'exited') {
+                        } else if (reasonRaw === 'exited' || reasonRaw === 'exited-normally') {
                             reason = 'pause';
                         }
 
@@ -419,13 +195,13 @@ export class DebugCPP extends DebugSession {
                         return;
                     }
 
-                    if (type === 'async' && (payload.clazz === 'thread-exited' || payload.clazz === 'exited-normally')) {
+                    if (record.clazz === 'thread-exited' || record.clazz === 'exited-normally') {
                         this.sendEvent(new TerminatedEvent());
                         return;
                     }
 
-                    if (type === 'notify' && payload.clazz === 'thread-created') {
-                        const tid = parseInt(asString(payload.results.id) || `${this.nextThreadId++}`, 10);
+                    if (record.asyncClass === 'notify' && record.clazz === 'thread-created') {
+                        const tid = parseInt(asString(record.results.id) || `${this.nextThreadId++}`, 10);
                         if (!Number.isNaN(tid)) {
                             this.threads.set(tid, { id: tid, name: `Thread ${tid}` });
                             this.sendEvent(new ThreadEvent('started', tid));
@@ -433,8 +209,8 @@ export class DebugCPP extends DebugSession {
                         return;
                     }
 
-                    if (type === 'notify' && payload.clazz === 'thread-exited') {
-                        const tid = parseInt(asString(payload.results.id) || '', 10);
+                    if (record.asyncClass === 'notify' && record.clazz === 'thread-exited') {
+                        const tid = parseInt(asString(record.results.id) || '', 10);
                         if (!Number.isNaN(tid) && this.threads.has(tid)) {
                             this.threads.delete(tid);
                             this.sendEvent(new ThreadEvent('exited', tid));
