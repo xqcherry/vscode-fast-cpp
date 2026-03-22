@@ -1,81 +1,93 @@
-import { DebugSession, InitializedEvent, ThreadEvent, OutputEvent, StoppedEvent, TerminatedEvent} from '@vscode/debugadapter';
-import { DebugProtocol} from '@vscode/debugprotocol';
+import {
+    DebugSession,
+    InitializedEvent,
+    OutputEvent,
+    StoppedEvent,
+    TerminatedEvent,
+    ThreadEvent,
+} from '@vscode/debugadapter';
+import { DebugProtocol } from '@vscode/debugprotocol';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as child_process from 'child_process';
-// npm install --save-dev @vscode/debugadapter @vscode/debugprotocol
 
-// 控制GDB进程
 class GDBController {
     private process?: child_process.ChildProcess;
     private buffer = '';
     private token = 1;
-    private pending = new Map<number, { // 存储所有已发送但还未收到响应的命令
-        resolve: (r: any) => void,
-        reject: (e: any) => void,
-        timeout: NodeJS.Timeout
-    }>();
+    private pending = new Map<
+        number,
+        {
+            resolve: (r: any) => void;
+            reject: (e: any) => void;
+            timeout: NodeJS.Timeout;
+        }
+    >();
     private onCallBack?: (type: string, payload: string) => void;
 
-    private onData(chunk : string) {
+    public constructor(private readonly gdbPath: string) {}
+
+    private onData(chunk: string) {
         this.buffer += chunk;
         let idx: number;
-        while((idx = this.buffer.indexOf('\n')) !== -1) {
+        while ((idx = this.buffer.indexOf('\n')) !== -1) {
             const line = this.buffer.slice(0, idx).trim();
             this.buffer = this.buffer.slice(idx + 1);
-            if (line.length === 0) continue;
+            if (line.length === 0 || line === '(gdb)') {
+                continue;
+            }
             this.handleLine(line);
         }
     }
 
-    private handleLine(line : string) { // MI2 协议解析器
+    private handleLine(line: string) {
         const m = line.match(/^(\d+)?(\^|=|\*|~|&|@)(.*)$/s);
-        if(!m) {
+        if (!m) {
             this.onCallBack?.('console', line);
-            return ;
+            return;
         }
 
-        const token = m[1] ? parseInt(m[1], 10) : null; 
+        const token = m[1] ? parseInt(m[1], 10) : null;
         const prefix = m[2];
         const rest = m[3];
 
-        if(prefix === '^') { // 命令响应
-            if(token !== null && this.pending.has(token)) {
+        if (prefix === '^') {
+            if (token !== null && this.pending.has(token)) {
                 const p = this.pending.get(token)!;
                 clearTimeout(p.timeout);
                 this.pending.delete(token);
-                if(rest.startsWith('done')) {
-                    p.resolve({
-                        raw: rest
-                    });
-                }
-                else if(rest.startsWith('error')) {
+                if (rest.startsWith('error')) {
                     const msgMatch = rest.match(/msg="([^"]*)"/);
                     const message = msgMatch ? msgMatch[1] : rest;
                     p.reject(new Error(message));
+                } else {
+                    p.resolve({ raw: rest });
                 }
-                else {
-                    p.resolve({
-                        raw: rest
-                    });
-                }
-            }
-            else {
+            } else {
                 this.onCallBack?.('response', rest);
             }
+            return;
         }
-        else if(prefix === '*') { // 异步状态
+
+        if (prefix === '*') {
             this.onCallBack?.('async', rest);
+            return;
         }
-        else if(prefix === '=') { // 通知事件
+
+        if (prefix === '=') {
             this.onCallBack?.('notify', rest);
+            return;
         }
-        else if(prefix === '~' || prefix === '&' || prefix === '@') { // 流输出
+
+        if (prefix === '~' || prefix === '&' || prefix === '@') {
             let s = rest;
             if (s.startsWith('"') && s.endsWith('"')) {
-                try { s = JSON.parse(s); } catch {}
+                try {
+                    s = JSON.parse(s);
+                } catch {
+                    // ignore parse failure, keep raw text
+                }
             }
-            // 转义后utg-8编码输出
             s = s.replace(/\\([0-7]{3})/g, (_, oct) => {
                 const code = parseInt(oct, 8);
                 return String.fromCharCode(code);
@@ -84,34 +96,49 @@ class GDBController {
                 s = Buffer.from(s, 'binary').toString('utf8');
             }
             this.onCallBack?.('stream', s);
-            }
-            else {
-                this.onCallBack?.('unknown', line);
-            }
-    } 
+            return;
+        }
+
+        this.onCallBack?.('unknown', line);
+    }
 
     start(cwd?: string) {
-        if(this.process) return ;
-        this.process = child_process.spawn('gdb', ['--interpreter=mi2'], {
+        if (this.process) {
+            return;
+        }
+
+        if (!fs.existsSync(this.gdbPath)) {
+            throw new Error(`未找到 gdb: ${this.gdbPath}`);
+        }
+
+        this.process = child_process.spawn(this.gdbPath, ['--interpreter=mi2'], {
             cwd,
-            shell: false
+            shell: false,
         });
-        this.process.stdout?.on('data', (d : Buffer) => this.onData(d.toString()));
-        this.process.stderr?.on('data', (d : Buffer) => this.onData('(stderr)' + d.toString()));
+
+        this.process.stdout?.on('data', (d: Buffer) => this.onData(d.toString()));
+        this.process.stderr?.on('data', (d: Buffer) => this.onData(`(stderr)${d.toString()}`));
+
         this.process.on('exit', () => {
-            for(const [, val] of this.pending) {
+            for (const [, val] of this.pending) {
                 clearTimeout(val.timeout);
-                val.reject(new Error(`GDB已退出`));
+                val.reject(new Error('GDB 已退出'));
             }
             this.pending.clear();
+            this.process = undefined;
         });
     }
 
     stop() {
-        if(!this.process) return ;
+        if (!this.process) {
+            return;
+        }
+
         try {
             this.process.kill();
-        } catch {}
+        } catch {
+            // ignore
+        }
         this.process = undefined;
     }
 
@@ -119,249 +146,273 @@ class GDBController {
         return Boolean(this.process);
     }
 
-    setCallBack(cb : (type: string, payload: string) => void) {
+    setCallBack(cb: (type: string, payload: string) => void) {
         this.onCallBack = cb;
     }
 
     sendCommand(cmd: string, timeoutMs = 5000): Promise<any> {
-        if(!this.process || !this.process.stdin) {
-            return Promise.reject(new Error(`GDB停止运行!`));
+        if (!this.process || !this.process.stdin) {
+            return Promise.reject(new Error('GDB 停止运行'));
         }
 
-        const token = this.token ++;
+        const token = this.token++;
         const full = `${token}${cmd}\n`;
+
         return new Promise((resolve, reject) => {
             const to = setTimeout(() => {
                 this.pending.delete(token);
-                reject(new Error(`GDB命令超时` + cmd));
+                reject(new Error(`GDB 命令超时: ${cmd}`));
             }, timeoutMs);
+
             this.pending.set(token, {
-                resolve: resolve,
-                reject: reject,
-                timeout: to
+                resolve,
+                reject,
+                timeout: to,
             });
+
             this.process!.stdin!.write(full);
         });
     }
 }
 
 export class DebugCPP extends DebugSession {
-    private gdb = new GDBController();
+    private gdb: GDBController;
     private cwd = '';
     private programPath = '';
-    private breakpoints = new Map<string, Array<{ line: number, id?: number }>>();
+    private breakpoints = new Map<string, Array<{ line: number; id?: number }>>();
 
-    // 进程管理
-    private threads = new Map<number, {id: number, name: string}>();
+    private threads = new Map<number, { id: number; name: string }>();
     private nextThreadId = 1;
     private currThreadId = 1;
-    // 栈帧管理
+
     private frameByThread = new Map<number, DebugProtocol.StackFrame[]>();
     private currFrameByThread = new Map<number, number>();
-    // 变量引用管理
-    private nextVarRef = 1;
-    private varRefMap = new Map<number, {
-        type: 'locals' | 'globals',
-        frameIndex?: number,
-        threadId?: number
-    }>();
 
-    public constructor() {
+    private nextVarRef = 1;
+    private varRefMap = new Map<
+        number,
+        {
+            type: 'locals' | 'globals';
+            frameIndex?: number;
+            threadId?: number;
+        }
+    >();
+
+    public constructor(private readonly defaultGdbPath: string) {
         super();
+        this.gdb = new GDBController(defaultGdbPath);
     }
 
-    // 初始化调试
-    protected initializeRequest(response:DebugProtocol.InitializeResponse): void {
+    protected initializeRequest(response: DebugProtocol.InitializeResponse): void {
         response.body = {
             supportsConfigurationDoneRequest: true,
         };
         this.sendResponse(response);
         this.sendEvent(new InitializedEvent());
     }
-    // 发送请求
-    protected async launchRequest(response: DebugProtocol.LaunchResponse, args: any): Promise<void> {
-        // this.sendEvent(new OutputEvent(`[DEBUG] program: ${args.program}\n`));
-        // this.sendEvent(new OutputEvent(`[DEBUG] cwd: ${args.cwd}\n`));
 
+    protected async launchRequest(response: DebugProtocol.LaunchResponse, args: any): Promise<void> {
         try {
             this.programPath = args.program;
             this.cwd = args.cwd || path.dirname(this.programPath);
+
+            const gdbPath = args.gdbPath || this.defaultGdbPath;
+            this.gdb = new GDBController(gdbPath);
 
             if (!this.programPath || !fs.existsSync(this.programPath)) {
                 this.sendEvent(new OutputEvent(`未找到可执行文件: ${this.programPath}\n`));
                 this.sendResponse(response);
                 return;
             }
-            // 一定要将路径中/改成\, 不然识别不到xd
+
             const norProPath = this.programPath.replace(/\\/g, '/');
             const norProCwd = this.cwd.replace(/\\/g, '/');
 
-            this.gdb.start(this.cwd); // 启动gdb
-            this.gdb.setCallBack((type: string, payload: string) => { // 监听gdb解析并发送给vscode
-                switch(type) {
+            this.gdb.start(this.cwd);
+            this.gdb.setCallBack((type: string, payload: string) => {
+                switch (type) {
                     case 'stream':
-                        this.sendEvent(new OutputEvent(payload + '\n'));
+                        this.sendEvent(new OutputEvent(payload));
                         break;
                     case 'async':
-                        if(payload.startsWith('stopped')) {
+                        if (payload.startsWith('stopped')) {
                             const tidm = payload.match(/thread-id="([^"]+)"/);
                             const tid = tidm ? parseInt(tidm[1], 10) : 1;
                             this.currThreadId = tid;
-                            this.sendEvent(new StoppedEvent('breakpoint', tid));
-                        }
-                        else if(payload.includes('exited-normally') || payload.includes('exited')) {
+
+                            let reason = 'breakpoint';
+                            if (payload.includes('reason="end-stepping-range"')) {
+                                reason = 'step';
+                            } else if (payload.includes('reason="signal-received"')) {
+                                reason = 'exception';
+                            } else if (payload.includes('reason="exited"') || payload.includes('exited-normally')) {
+                                reason = 'pause';
+                            }
+
+                            this.sendEvent(new StoppedEvent(reason, tid));
+                        } else if (payload.includes('exited-normally') || payload.includes('exited')) {
                             this.sendEvent(new TerminatedEvent());
                         }
                         break;
                     case 'notify':
-                        if(payload.startsWith('thread-created')) {
+                        if (payload.startsWith('thread-created')) {
                             const idm = payload.match(/id="([^"]+)"/);
-                            const tid = idm ? parseInt(idm[1], 10) : this.nextThreadId ++;
+                            const tid = idm ? parseInt(idm[1], 10) : this.nextThreadId++;
+                            this.threads.set(tid, { id: tid, name: `Thread ${tid}` });
                             this.sendEvent(new ThreadEvent('started', tid));
-                        }
-                        else if(payload.startsWith('thread-exited')) {
+                        } else if (payload.startsWith('thread-exited')) {
                             const idm = payload.match(/id="([^"]+)"/);
                             const tid = idm ? parseInt(idm[1], 10) : undefined;
-                            if(tid && this.threads.has(tid)) {
+                            if (tid && this.threads.has(tid)) {
                                 this.threads.delete(tid);
                                 this.sendEvent(new ThreadEvent('exited', tid));
                             }
                         }
                         break;
+                    default:
+                        break;
                 }
             });
-            // 初始会话,自动编译当前文件
-            await this.gdb.sendCommand(`-file-exec-and-symbols "${norProPath}"`); // 指定要调试的可执行文件路径
-            await this.gdb.sendCommand(`-gdb-set mi-async on`); // 启用GDB/MI的异步模式
-            await this.gdb.sendCommand(`-environment-cd "${norProCwd}"`); // 设置工作目录
-    
+
+            await this.gdb.sendCommand(`-file-exec-and-symbols "${norProPath}"`);
+            await this.gdb.sendCommand('-gdb-set mi-async on');
+            await this.gdb.sendCommand(`-environment-cd "${norProCwd}"`);
+
             this.sendResponse(response);
-        } catch(err) {
+        } catch (err) {
             this.sendEvent(new OutputEvent(`[Launch Error] ${err}\n`));
             this.sendResponse(response);
         }
     }
-    // 退出gdb
-    protected disconnectRequest(response: DebugProtocol.DisconnectResponse): void {
-        if(this.gdb.isRunning()) {
-            this.gdb.sendCommand('-gdb-exit');
+
+    protected async disconnectRequest(response: DebugProtocol.DisconnectResponse): Promise<void> {
+        if (this.gdb.isRunning()) {
+            try {
+                await this.gdb.sendCommand('-gdb-exit', 2000);
+            } catch {
+                // ignore
+            }
             this.gdb.stop();
         }
         this.sendResponse(response);
         this.sendEvent(new TerminatedEvent());
     }
 
-    // 接下来实现map
-    // DAP <--> GDB-MI
-    // 线程管理
     protected async threadsRequest(response: DebugProtocol.ThreadsResponse): Promise<void> {
         try {
-            if(this.threads.size === 0) {
-                this.threads.set(1, {id: 1, name: 'Main Thread'});
+            if (this.threads.size === 0) {
+                this.threads.set(1, { id: 1, name: 'Main Thread' });
             }
-            const list = Array.from(this.threads.values()).map(t => ({id: t.id, name: t.name}));
-            response.body = {threads: list};
+            const list = Array.from(this.threads.values()).map((t) => ({ id: t.id, name: t.name }));
+            response.body = { threads: list };
             this.sendResponse(response);
-        } catch(err : any) {
-            response.body = {threads: [{id: 1, name: 'Main Thread'}]};
+        } catch {
+            response.body = { threads: [{ id: 1, name: 'Main Thread' }] };
             this.sendResponse(response);
         }
     }
-    // 暂停程序
+
     protected async pauseRequest(response: DebugProtocol.PauseResponse): Promise<void> {
         try {
             await this.gdb.sendCommand('-exec-interrupt');
             this.sendResponse(response);
-        } catch (err : any) {
+        } catch (err: any) {
             this.sendEvent(new OutputEvent(`[pause error] ${err.message}\n`));
             this.sendResponse(response);
         }
     }
-    // 继续执行
+
     protected async continueRequest(response: DebugProtocol.ContinueResponse): Promise<void> {
         try {
-            await this.gdb.sendCommand(`-exec-continue`);
+            await this.gdb.sendCommand('-exec-continue');
+            response.body = { allThreadsContinued: true };
             this.sendResponse(response);
-        } catch (err:any) {
+        } catch (err: any) {
             this.sendEvent(new OutputEvent(`[continue error] ${err.message}\n`));
             this.sendResponse(response);
         }
     }
-    // 单步跳过
+
     protected async nextRequest(response: DebugProtocol.NextResponse): Promise<void> {
         try {
-            await this.gdb.sendCommand(`-exec-next`);
+            await this.gdb.sendCommand('-exec-next');
             this.sendResponse(response);
-        } catch (err:any) {
+        } catch (err: any) {
             this.sendEvent(new OutputEvent(`[next error] ${err.message}\n`));
             this.sendResponse(response);
         }
     }
-    // 单步进入
+
     protected async stepInRequest(response: DebugProtocol.StepInResponse): Promise<void> {
         try {
-            await this.gdb.sendCommand(`-exec-step`);
+            await this.gdb.sendCommand('-exec-step');
             this.sendResponse(response);
-        } catch (err:any) {
+        } catch (err: any) {
             this.sendEvent(new OutputEvent(`[step error] ${err.message}\n`));
             this.sendResponse(response);
         }
     }
-    // 断点设置
+
     protected async setBreakPointsRequest(
         response: DebugProtocol.SetBreakpointsResponse,
-        args: DebugProtocol.SetBreakpointsArguments): Promise<void> {
-        
+        args: DebugProtocol.SetBreakpointsArguments
+    ): Promise<void> {
         const source = args.source.path || args.source.name || '<unknown>';
-        const norProsource = path.resolve(source).replace(/\\/g, '/');
-        // 每次setBreakpoints都是完整替换source的断点列表,
-        // 先删除之前该source的所有断点，否则命令行与可视化不同步xd
-        const pre = this.breakpoints.get(source) || [];
-        const gdbIdDelete = pre.map(t => t.id).filter(id => id !== undefined) as number[];
-        if(gdbIdDelete.length > 0) {
-            await this.gdb.sendCommand(`-break-delete ${gdbIdDelete.join(' ')}`);
-        }
+        const normalizedSource = path.resolve(source).replace(/\\/g, '/');
 
-        this.breakpoints.set(source, []);
-        const outbps : DebugProtocol.Breakpoint[] = [];
-        for(const bp of args.breakpoints || []) {
-            try {
-                const line = bp.line;
-                const insertcmd = `-break-insert "${norProsource}:${line}"`;
-                const raw: any = await this.gdb.sendCommand(insertcmd);
-                const mat = (raw.raw || '').match(/number="([^"]+)"/);
-                const gdbId = mat ? parseInt(mat[1], 10) : undefined;
-
-                this.breakpoints.get(source)!.push({
-                    line: line,
-                    id: gdbId
-                });
-                outbps.push({
-                    verified: true,
-                    line: line
-                } as DebugProtocol.Breakpoint);
-            } catch(err) {
-                outbps.push({
-                    verified: false,
-                    line: bp.line
-                } as DebugProtocol.Breakpoint);
+        try {
+            const pre = this.breakpoints.get(source) || [];
+            const gdbIdDelete = pre.map((t) => t.id).filter((id) => id !== undefined) as number[];
+            if (gdbIdDelete.length > 0) {
+                await this.gdb.sendCommand(`-break-delete ${gdbIdDelete.join(' ')}`);
             }
+
+            this.breakpoints.set(source, []);
+            const outbps: DebugProtocol.Breakpoint[] = [];
+
+            for (const bp of args.breakpoints || []) {
+                try {
+                    const line = bp.line;
+                    const insertCmd = `-break-insert "${normalizedSource}:${line}"`;
+                    const raw: any = await this.gdb.sendCommand(insertCmd);
+                    const mat = (raw.raw || '').match(/number="([^"]+)"/);
+                    const gdbId = mat ? parseInt(mat[1], 10) : undefined;
+
+                    this.breakpoints.get(source)!.push({ line, id: gdbId });
+
+                    outbps.push({
+                        verified: true,
+                        line,
+                        id: gdbId,
+                    } as DebugProtocol.Breakpoint);
+                } catch {
+                    outbps.push({
+                        verified: false,
+                        line: bp.line,
+                    } as DebugProtocol.Breakpoint);
+                }
+            }
+
+            response.body = { breakpoints: outbps };
+            this.sendResponse(response);
+        } catch (err: any) {
+            this.sendEvent(new OutputEvent(`[setBreakPoints error] ${err.message}\n`));
+            response.body = { breakpoints: [] };
+            this.sendResponse(response);
         }
-        response.body = {breakpoints: outbps};
-        this.sendResponse(response);
     }
-    // 启动调试
+
     protected async configurationDoneRequest(response: DebugProtocol.ConfigurationDoneResponse): Promise<void> {
         try {
-            await this.gdb.sendCommand(`-exec-run`);
-            this.sendEvent(new OutputEvent(`[Launch] GBD-MI 启动成功, 路径为: ${this.programPath}\n`));
+            await this.gdb.sendCommand('-exec-run');
+            this.sendEvent(new OutputEvent(`[Launch] GDB-MI 启动成功, 路径: ${this.programPath}\n`));
             this.sendResponse(response);
-        } catch (err:any) {
+        } catch (err: any) {
             this.sendEvent(new OutputEvent(`[run error] ${err.message}\n`));
             this.sendResponse(response);
         }
     }
-    // 表达式求值
+
     protected async evaluateRequest(
         response: DebugProtocol.EvaluateResponse,
         args: DebugProtocol.EvaluateArguments
@@ -370,15 +421,17 @@ export class DebugCPP extends DebugSession {
             const expr = args.expression;
 
             if (args.context === 'repl') {
-                const raw: any = await this.gdb.sendCommand(expr.startsWith('-') ? expr : `-interpreter-exec console "${expr}"`);
+                const raw: any = await this.gdb.sendCommand(
+                    expr.startsWith('-') ? expr : `-interpreter-exec console "${expr}"`
+                );
                 response.body = {
                     result: raw.raw || '(ok)',
-                    variablesReference: 0
+                    variablesReference: 0,
                 };
                 this.sendResponse(response);
                 return;
             }
-            
+
             const raw: any = await this.gdb.sendCommand(`-data-evaluate-expression "${expr}"`);
             const txt = raw.raw;
             const match = txt.match(/value="([^"]+)"/);
@@ -386,137 +439,148 @@ export class DebugCPP extends DebugSession {
 
             response.body = {
                 result: val,
-                variablesReference: 0
+                variablesReference: 0,
             };
             this.sendResponse(response);
         } catch (err: any) {
             this.sendEvent(new OutputEvent(`[evaluate error] ${err.message}\n`));
             response.body = {
                 result: `(error) ${err.message}`,
-                variablesReference: 0 
+                variablesReference: 0,
             };
             this.sendResponse(response);
         }
     }
-    // 查看堆栈
+
     protected async stackTraceRequest(response: DebugProtocol.StackTraceResponse): Promise<void> {
-        
         try {
-            const raw: any = await this.gdb.sendCommand(`-stack-list-frames`);
+            const raw: any = await this.gdb.sendCommand('-stack-list-frames');
             const txt = raw.raw;
             const frames: DebugProtocol.StackFrame[] = [];
             const frameRe = /frame=\{([^}]+)\}/g;
 
-            let id = 0, m;
+            let id = 0;
+            let m: RegExpExecArray | null;
             while ((m = frameRe.exec(txt)) !== null) {
                 const body = m[1];
                 const func = (body.match(/func="([^"]+)"/) || [])[1] || '<unknown>';
                 const file = (body.match(/file="([^"]+)"/) || [])[1];
                 const lineS = (body.match(/line="([^"]+)"/) || [])[1];
                 const line = lineS ? parseInt(lineS, 10) : 0;
-                const name = func;
-                const source = file ? { name: path.basename(file), path: file } : undefined;
+                const source = file
+                    ? {
+                          name: path.basename(file),
+                          path: file,
+                      }
+                    : undefined;
+
                 frames.push({
-                    id: id ++,
-                    name,
+                    id: id++,
+                    name: func,
                     source,
                     line: Math.max(1, line),
-                    column: 1
+                    column: 1,
                 } as DebugProtocol.StackFrame);
             }
-            // 存储栈帧
+
             const tid = this.currThreadId || 1;
             this.frameByThread.set(tid, frames);
-            if(!this.currFrameByThread.has(tid)) {
+            if (!this.currFrameByThread.has(tid)) {
                 this.currFrameByThread.set(tid, 0);
             }
-            response.body = {stackFrames: frames, totalFrames: frames.length};
+
+            response.body = { stackFrames: frames, totalFrames: frames.length };
             this.sendResponse(response);
-        } catch(err:any) {
+        } catch (err: any) {
             this.sendEvent(new OutputEvent(`[stackTrace error] ${err.message}\n`));
             response.body = { stackFrames: [], totalFrames: 0 };
             this.sendResponse(response);
         }
     }
-    // 处理作用域
+
     protected async scopesRequest(
         response: DebugProtocol.ScopesResponse,
-        args: DebugProtocol.ScopesArguments): Promise<void> {
+        args: DebugProtocol.ScopesArguments
+    ): Promise<void> {
         try {
             const frameId = args.frameId;
-            const localsRef = this.nextVarRef ++;
+            const localsRef = this.nextVarRef++;
             this.varRefMap.set(localsRef, {
                 type: 'locals',
                 frameIndex: frameId,
-                threadId: this.currThreadId
+                threadId: this.currThreadId,
             });
-            const globalsRef = this.nextVarRef ++;
+
+            const globalsRef = this.nextVarRef++;
             this.varRefMap.set(globalsRef, {
-                type: 'globals'
+                type: 'globals',
             });
 
             response.body = {
                 scopes: [
                     { name: 'Locals', variablesReference: localsRef, expensive: false },
-                    { name: 'Globals', variablesReference: globalsRef, expensive: true }
-                ]
+                    { name: 'Globals', variablesReference: globalsRef, expensive: true },
+                ],
             };
             this.sendResponse(response);
         } catch (err: any) {
             this.sendEvent(new OutputEvent(`[scopes error] ${err.message}\n`));
-            response.body = {scopes: [] };
+            response.body = { scopes: [] };
             this.sendResponse(response);
         }
     }
-    // 查看变量
+
     protected async variablesRequest(
         response: DebugProtocol.VariablesResponse,
-        args: DebugProtocol.VariablesArguments): Promise<void> {
+        args: DebugProtocol.VariablesArguments
+    ): Promise<void> {
         try {
             const vref = args.variablesReference;
-            if(!this.varRefMap.has(vref)) {
+            if (!this.varRefMap.has(vref)) {
                 response.body = { variables: [] };
                 this.sendResponse(response);
                 return;
             }
+
             const meta = this.varRefMap.get(vref)!;
-            const vars : DebugProtocol.Variable[] = [];
+            const vars: DebugProtocol.Variable[] = [];
 
-            if(meta.type === 'globals') {
-                const rawAny : any = await this.gdb.sendCommand(`-var-list-children --all-values`);
-                const txt = rawAny.raw || '';
-                const varRe = /\b([A-Za-z_][A-Za-z0-9_]*)\s*;/g;
-
-                let match;
-                while ((match = varRe.exec(txt)) !== null) {
-                    vars.push({
-                        name: match[1],
-                        value: match[2] || '(unavailable)',
-                        variablesReference: 0
-                    });
-                }
-            }
-            else if (meta.type === 'locals') {
-                const frameIndex = meta.frameIndex || 0;
-                await this.gdb.sendCommand(`-stack-select-frame ${frameIndex}`);
-                const rawAny: any = await this.gdb.sendCommand(`-stack-list-variables --all-values`);
+            if (meta.type === 'globals') {
+                const rawAny: any = await this.gdb.sendCommand('-stack-list-variables --all-values');
                 const txt = rawAny.raw || '';
                 const varRe = /name="([^"]+)",value="([^"]*)"/g;
 
-                let match;
+                let match: RegExpExecArray | null;
                 while ((match = varRe.exec(txt)) !== null) {
                     vars.push({
                         name: match[1],
                         value: match[2] || '(unavailable)',
-                        variablesReference: 0
+                        variablesReference: 0,
+                    });
+                }
+            } else if (meta.type === 'locals') {
+                const frameIndex = meta.frameIndex || 0;
+                await this.gdb.sendCommand(`-stack-select-frame ${frameIndex}`);
+                const rawAny: any = await this.gdb.sendCommand('-stack-list-variables --all-values');
+                const txt = rawAny.raw || '';
+                const varRe = /name="([^"]+)",value="([^"]*)"/g;
+
+                let match: RegExpExecArray | null;
+                while ((match = varRe.exec(txt)) !== null) {
+                    vars.push({
+                        name: match[1],
+                        value: match[2] || '(unavailable)',
+                        variablesReference: 0,
                     });
                 }
             }
+
             response.body = { variables: vars };
             this.sendResponse(response);
-        } catch(err : any) {
+        } catch (err: any) {
             this.sendEvent(new OutputEvent(`[variables error] ${err.message}\n`));
-            response.body = {variables: []};
+            response.body = { variables: [] };
+            this.sendResponse(response);
         }
     }
 }

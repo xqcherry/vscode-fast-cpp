@@ -103,6 +103,10 @@
                 "type": "boolean",
                 "default": true,
                 "description": "是否在程序入口处停止"
+              },
+              "gdbPath": {
+                "type": "string",
+                "description": "gdb 可执行文件路径（插件自动传入）"
               }
             }
           }
