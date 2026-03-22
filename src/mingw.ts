@@ -14,13 +14,10 @@ export interface MinGWToolchain {
 
 export async function ensureMinGW(context: vscode.ExtensionContext): Promise<MinGWToolchain> {
     const targetDir = path.join(context.globalStorageUri.fsPath, 'mingw');
-    const binDir = path.join(targetDir, 'bin');
-    const gppPath = path.join(binDir, 'x86_64-w64-mingw32-g++.exe');
-    const gdbPath = path.join(binDir, 'x86_64-w64-mingw32-gdb.exe');
 
-    const ready = fs.existsSync(gppPath) && fs.existsSync(gdbPath);
+    let toolchain = findToolchainInDir(targetDir);
 
-    if (!ready) {
+    if (!toolchain) {
         vscode.window.showInformationMessage('首次使用：正在准备 MinGW 编译/调试环境...');
         fs.mkdirSync(targetDir, { recursive: true });
 
@@ -52,20 +49,17 @@ export async function ensureMinGW(context: vscode.ExtensionContext): Promise<Min
             }
         );
 
-        if (!fs.existsSync(gppPath) || !fs.existsSync(gdbPath)) {
-            throw new Error(`MinGW 安装不完整，未找到 g++ 或 gdb: ${binDir}`);
+        toolchain = findToolchainInDir(targetDir);
+        if (!toolchain) {
+            throw new Error(`MinGW 安装不完整，未找到 g++ 或 gdb: ${targetDir}`);
         }
 
         vscode.window.showInformationMessage('MinGW 已成功安装！');
     }
 
-    process.env.PATH = `${binDir}${path.delimiter}${process.env.PATH || ''}`;
+    process.env.PATH = `${toolchain.binDir}${path.delimiter}${process.env.PATH || ''}`;
 
-    return {
-        binDir,
-        gppPath,
-        gdbPath,
-    };
+    return toolchain;
 }
 
 function downloadFileToBuffer(
@@ -114,4 +108,63 @@ function downloadFileToBuffer(
                 reject(new Error(`下载过程中发生错误: ${err.message}`));
             });
     });
+}
+
+function findToolchainInDir(rootDir: string): MinGWToolchain | null {
+    const directBin = path.join(rootDir, 'bin');
+    const direct = makeToolchainFromBinDir(directBin);
+    if (direct) {
+        return direct;
+    }
+
+    if (!fs.existsSync(rootDir)) {
+        return null;
+    }
+
+    const queue: string[] = [rootDir];
+
+    while (queue.length > 0) {
+        const current = queue.shift()!;
+        const entries = safeReadDir(current);
+
+        for (const entry of entries) {
+            const fullPath = path.join(current, entry.name);
+
+            if (entry.isDirectory()) {
+                if (entry.name.toLowerCase() === 'bin') {
+                    const found = makeToolchainFromBinDir(fullPath);
+                    if (found) {
+                        return found;
+                    }
+                } else {
+                    queue.push(fullPath);
+                }
+            }
+        }
+    }
+
+    return null;
+}
+
+function makeToolchainFromBinDir(binDir: string): MinGWToolchain | null {
+    const gppPath = path.join(binDir, 'x86_64-w64-mingw32-g++.exe');
+    const gdbPath = path.join(binDir, 'x86_64-w64-mingw32-gdb.exe');
+
+    if (!fs.existsSync(gppPath) || !fs.existsSync(gdbPath)) {
+        return null;
+    }
+
+    return {
+        binDir,
+        gppPath,
+        gdbPath,
+    };
+}
+
+function safeReadDir(dir: string): fs.Dirent[] {
+    try {
+        return fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+        return [];
+    }
 }
