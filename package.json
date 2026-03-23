@@ -3,6 +3,12 @@
   "displayName": "vscode-fast-cpp",
   "description": "fast open a cpp code without download others!",
   "version": "0.1.0",
+  "icon": "assets/icon.png",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/xqcherry/vscode-fast-cpp"
+  },
   "engines": {
     "vscode": "^1.104.0"
   },
