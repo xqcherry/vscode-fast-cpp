@@ -143,6 +143,10 @@ export class DebugCPP extends DebugSession {
         threadId?: number;
     }>();
 
+    private toMIString(value: string): string {
+        return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+    }
+
     public constructor(private readonly defaultGdbPath: string) {
         super();
         this.gdb = new GDBController(defaultGdbPath);
@@ -168,10 +172,10 @@ export class DebugCPP extends DebugSession {
                 return;
             }
 
-            const norProPath = this.programPath.replace(/\\/g, '/');
-            const norProCwd = this.cwd.replace(/\\/g, '/');
+            const resolvedProgramPath = path.resolve(this.programPath);
+            const resolvedCwd = path.resolve(this.cwd);
 
-            this.gdb.start(this.cwd);
+            this.gdb.start(resolvedCwd);
             this.gdb.setCallBack((record) => {
                 if (record.type === 'stream') {
                     this.sendEvent(new OutputEvent(record.text));
@@ -221,9 +225,9 @@ export class DebugCPP extends DebugSession {
                 }
             });
 
-            await this.gdb.sendCommand(`-file-exec-and-symbols "${norProPath}"`);
+            await this.gdb.sendCommand(`-file-exec-and-symbols ${this.toMIString(resolvedProgramPath)}`);
             await this.gdb.sendCommand('-gdb-set mi-async on');
-            await this.gdb.sendCommand(`-environment-cd "${norProCwd}"`);
+            await this.gdb.sendCommand(`-environment-cd ${this.toMIString(resolvedCwd)}`);
             this.launched = false;
             this.readyToRun = true;
 
