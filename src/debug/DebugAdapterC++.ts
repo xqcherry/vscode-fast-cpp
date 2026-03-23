@@ -7,8 +7,10 @@ import {
     ThreadEvent,
 } from '@vscode/debugadapter';
 import { DebugProtocol } from '@vscode/debugprotocol';
+import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 import * as child_process from 'child_process';
 import { asArray, asString, asTuple, MIRecord, MIResultRecord, parseMIOutputLine } from './miParser';
 
@@ -128,8 +130,13 @@ export class DebugCPP extends DebugSession {
     private gdb: GDBController;
     private cwd = '';
     private programPath = '';
-    private launched = false;
-    private readyToRun = false;
+    private launchReady = false;
+    private configurationDoneReceived = false;
+
+    private sourcePathByBasename = new Map<string, string>();
+    private workspaceSourceIndexByBasename = new Map<string, string[]>();
+    private recentBreakpointSources: string[] = [];
+    private gdbSubstitutePathApplied = new Set<string>();
     private breakpoints = new Map<string, Array<{ line: number; id?: number }>>();
 
     private threads = new Map<number, { id: number; name: string }>();
@@ -143,13 +150,166 @@ export class DebugCPP extends DebugSession {
         threadId?: number;
     }>();
 
-    private toMIString(value: string): string {
-        return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
-    }
-
     public constructor(private readonly defaultGdbPath: string) {
         super();
         this.gdb = new GDBController(defaultGdbPath);
+    }
+
+    private normalizePath(p: string): string {
+        return p.replace(/\\/g, '/').toLowerCase();
+    }
+
+    private indexWorkspaceSources(rootDir: string): void {
+        this.workspaceSourceIndexByBasename.clear();
+
+        const stack: string[] = [rootDir];
+        while (stack.length > 0) {
+            const current = stack.pop()!;
+            let entries: fs.Dirent[];
+            try {
+                entries = fs.readdirSync(current, { withFileTypes: true });
+            } catch {
+                continue;
+            }
+
+            for (const entry of entries) {
+                const full = path.join(current, entry.name);
+                if (entry.isDirectory()) {
+                    if (entry.name === '.git' || entry.name === 'node_modules' || entry.name === '.vscode') {
+                        continue;
+                    }
+                    stack.push(full);
+                    continue;
+                }
+
+                if (!entry.isFile()) {
+                    continue;
+                }
+
+                if (!/\.(c|cc|cpp|cxx|h|hh|hpp|hxx)$/i.test(entry.name)) {
+                    continue;
+                }
+
+                const key = entry.name.toLowerCase();
+                const arr = this.workspaceSourceIndexByBasename.get(key) || [];
+                arr.push(path.resolve(full));
+                this.workspaceSourceIndexByBasename.set(key, arr);
+            }
+        }
+    }
+
+    private registerSourcePath(sourcePath: string): void {
+        const resolved = path.resolve(sourcePath);
+        this.sourcePathByBasename.set(path.basename(resolved), resolved);
+    }
+
+    private rememberRecentBreakpointSource(sourcePath: string): void {
+        const resolved = path.resolve(sourcePath);
+        const normalized = this.normalizePath(resolved);
+        this.recentBreakpointSources = [
+            resolved,
+            ...this.recentBreakpointSources.filter((p) => this.normalizePath(p) !== normalized),
+        ].slice(0, 20);
+    }
+
+    private pickBestSourceCandidate(candidates: string[], fileRaw: string): string {
+        if (candidates.length === 1) {
+            return candidates[0];
+        }
+
+        const normalizedRaw = this.normalizePath(fileRaw);
+        const bySuffix = candidates.find((p) => normalizedRaw.endsWith(path.basename(p).toLowerCase()));
+        if (bySuffix) {
+            return bySuffix;
+        }
+
+        for (const recent of this.recentBreakpointSources) {
+            const recentDir = this.normalizePath(path.dirname(recent));
+            const preferred = candidates.find((p) => this.normalizePath(path.dirname(p)).includes(recentDir));
+            if (preferred) {
+                return preferred;
+            }
+        }
+
+        return candidates[0];
+    }
+
+    private async applySubstitutePathIfNeeded(fileRaw?: string, mappedFile?: string): Promise<void> {
+        if (!fileRaw || !mappedFile) {
+            return;
+        }
+
+        const rawDir = path.dirname(fileRaw).replace(/\\/g, '/');
+        const mappedDir = path.dirname(mappedFile).replace(/\\/g, '/');
+
+        if (!rawDir || !mappedDir || this.normalizePath(rawDir) === this.normalizePath(mappedDir)) {
+            return;
+        }
+
+        const key = `${this.normalizePath(rawDir)}=>${this.normalizePath(mappedDir)}`;
+        if (this.gdbSubstitutePathApplied.has(key)) {
+            return;
+        }
+
+        try {
+            await this.gdb.sendCommand(`-interpreter-exec console "set substitute-path ${rawDir} ${mappedDir}"`);
+            this.gdbSubstitutePathApplied.add(key);
+            this.sendEvent(new OutputEvent(`[SourceMap] substitute-path: ${rawDir} -> ${mappedDir}\n`));
+        } catch (err: any) {
+            this.sendEvent(new OutputEvent(`[SourceMap warn] set substitute-path 失败: ${err?.message || String(err)}\n`));
+        }
+    }
+
+    private async preInjectSourceMapFromBreakpoints(): Promise<void> {
+        const sources = Array.from(this.breakpoints.keys());
+        const sourceDirs = Array.from(new Set(sources.map((s) => path.dirname(path.resolve(s)).replace(/\\/g, '/'))));
+
+        for (const dir of sourceDirs) {
+            const variants = Array.from(new Set([dir, dir.replace(/\//g, '\\')]));
+            for (const rawDir of variants) {
+                const mappedDir = dir;
+                const key = `${this.normalizePath(rawDir)}=>${this.normalizePath(mappedDir)}`;
+                if (this.gdbSubstitutePathApplied.has(key)) {
+                    continue;
+                }
+
+                try {
+                    await this.gdb.sendCommand(`-interpreter-exec console "set substitute-path ${rawDir} ${mappedDir}"`);
+                    this.gdbSubstitutePathApplied.add(key);
+                    this.sendEvent(new OutputEvent(`[SourceMap] preinject: ${rawDir} -> ${mappedDir}\n`));
+                } catch (err: any) {
+                    this.sendEvent(new OutputEvent(`[SourceMap warn] preinject 失败: ${err?.message || String(err)}\n`));
+                }
+            }
+        }
+    }
+
+    private resolveSourcePathFromGdb(fileRaw?: string): string | undefined {
+        if (!fileRaw) {
+            return undefined;
+        }
+
+        const baseName = path.basename(fileRaw);
+        const direct = this.sourcePathByBasename.get(baseName);
+        if (direct) {
+            return direct;
+        }
+
+        const candidates = this.workspaceSourceIndexByBasename.get(baseName.toLowerCase()) || [];
+        if (candidates.length === 0) {
+            return fileRaw;
+        }
+
+        const normalizedRaw = this.normalizePath(fileRaw);
+        const exact = candidates.find((p) => normalizedRaw.endsWith(this.normalizePath(p)));
+        if (exact) {
+            this.sourcePathByBasename.set(baseName, exact);
+            return exact;
+        }
+
+        const best = this.pickBestSourceCandidate(candidates, fileRaw);
+        this.sourcePathByBasename.set(baseName, best);
+        return best;
     }
 
     protected initializeRequest(response: DebugProtocol.InitializeResponse): void {
@@ -159,6 +319,10 @@ export class DebugCPP extends DebugSession {
     }
 
     protected async launchRequest(response: DebugProtocol.LaunchResponse, args: any): Promise<void> {
+        this.launchReady = false;
+        this.configurationDoneReceived = false;
+        this.gdbSubstitutePathApplied.clear();
+
         try {
             this.programPath = args.program;
             this.cwd = args.cwd || path.dirname(this.programPath);
@@ -172,10 +336,38 @@ export class DebugCPP extends DebugSession {
                 return;
             }
 
-            const resolvedProgramPath = path.resolve(this.programPath);
-            const resolvedCwd = path.resolve(this.cwd);
+            this.sourcePathByBasename.clear();
+            this.registerSourcePath(this.programPath);
 
-            this.gdb.start(resolvedCwd);
+            const normalizedProgram = path.resolve(this.programPath);
+            const normalizedCwd = path.resolve(this.cwd);
+
+            const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+            if (wsRoot && fs.existsSync(wsRoot)) {
+                this.indexWorkspaceSources(wsRoot);
+            }
+
+            let gdbProgramPath = normalizedProgram;
+            let gdbWorkingDir = normalizedCwd;
+            const hasNonAsciiPath = /[^\x00-\x7F]/.test(normalizedProgram) || /[^\x00-\x7F]/.test(normalizedCwd);
+            if (hasNonAsciiPath) {
+                const safeDir = path.join(os.tmpdir(), 'xq-cppdbg');
+                fs.mkdirSync(safeDir, { recursive: true });
+                const safeExe = path.join(safeDir, path.basename(normalizedProgram));
+                fs.copyFileSync(normalizedProgram, safeExe);
+                gdbProgramPath = safeExe;
+                gdbWorkingDir = safeDir;
+                this.sendEvent(new OutputEvent(`[Launch] 检测到非 ASCII 路径，已切换调试目录: ${safeDir}\n`));
+                this.sendEvent(new OutputEvent(`[Launch] 已复制调试副本: ${safeExe}\n`));
+            }
+
+            const gdbProgramCandidates = Array.from(new Set([
+                gdbProgramPath,
+                gdbProgramPath.replace(/\\/g, '/'),
+                gdbProgramPath.replace(/\\/g, '\\\\'),
+            ]));
+
+            this.gdb.start(gdbWorkingDir);
             this.gdb.setCallBack((record) => {
                 if (record.type === 'stream') {
                     this.sendEvent(new OutputEvent(record.text));
@@ -225,11 +417,37 @@ export class DebugCPP extends DebugSession {
                 }
             });
 
-            await this.gdb.sendCommand(`-file-exec-and-symbols ${this.toMIString(resolvedProgramPath)}`);
+            let loaded = false;
+            const loadErrors: string[] = [];
+
+            for (const candidate of gdbProgramCandidates) {
+                try {
+                    await this.gdb.sendCommand(`-file-exec-and-symbols "${candidate}"`);
+                    loaded = true;
+                    break;
+                } catch (err: any) {
+                    loadErrors.push(`${candidate} -> ${err?.message || String(err)}`);
+                }
+            }
+
+            if (!loaded) {
+                throw new Error(`无法加载可执行文件:\n${loadErrors.join('\n')}`);
+            }
+
             await this.gdb.sendCommand('-gdb-set mi-async on');
-            await this.gdb.sendCommand(`-environment-cd ${this.toMIString(resolvedCwd)}`);
-            this.launched = false;
-            this.readyToRun = true;
+            await this.gdb.sendCommand(`-environment-cd "${gdbWorkingDir.replace(/\\/g, '/')}"`);
+            await this.preInjectSourceMapFromBreakpoints();
+
+            this.launchReady = true;
+
+            if (this.configurationDoneReceived) {
+                try {
+                    await this.gdb.sendCommand('-exec-run');
+                    this.sendEvent(new OutputEvent(`[Launch] GDB-MI 启动成功, 路径: ${this.programPath}\n`));
+                } catch (err: any) {
+                    this.sendEvent(new OutputEvent(`[run error] ${err.message}\n`));
+                }
+            }
 
             this.sendResponse(response);
         } catch (err) {
@@ -247,8 +465,6 @@ export class DebugCPP extends DebugSession {
             }
             this.gdb.stop();
         }
-        this.readyToRun = false;
-        this.launched = false;
         this.sendResponse(response);
         this.sendEvent(new TerminatedEvent());
     }
@@ -303,7 +519,11 @@ export class DebugCPP extends DebugSession {
         args: DebugProtocol.SetBreakpointsArguments
     ): Promise<void> {
         const source = args.source.path || args.source.name || '<unknown>';
-        const normalizedSource = path.resolve(source).replace(/\\/g, '/');
+        const sourceResolved = path.resolve(source);
+        const normalizedSource = sourceResolved.replace(/\\/g, '/');
+        this.registerSourcePath(sourceResolved);
+        this.rememberRecentBreakpointSource(sourceResolved);
+        await this.applySubstitutePathIfNeeded(source, sourceResolved);
 
         try {
             const pre = this.breakpoints.get(source) || [];
@@ -346,14 +566,16 @@ export class DebugCPP extends DebugSession {
     }
 
     protected async configurationDoneRequest(response: DebugProtocol.ConfigurationDoneResponse): Promise<void> {
-        if (!this.readyToRun || this.launched) {
+        this.configurationDoneReceived = true;
+
+        if (!this.launchReady) {
+            this.sendEvent(new OutputEvent('[run delayed] 等待 launch 完成后自动执行 -exec-run。\n'));
             this.sendResponse(response);
             return;
         }
 
         try {
             await this.gdb.sendCommand('-exec-run');
-            this.launched = true;
             this.sendEvent(new OutputEvent(`[Launch] GDB-MI 启动成功, 路径: ${this.programPath}\n`));
         } catch (err: any) {
             this.sendEvent(new OutputEvent(`[run error] ${err.message}\n`));
@@ -400,12 +622,16 @@ export class DebugCPP extends DebugSession {
                         continue;
                     }
 
-                    const file = asString(frameObj.file) || asString(frameObj.fullname);
+                    const fileRaw = asString(frameObj.fullname) || asString(frameObj.file);
+                    const displayFile = this.resolveSourcePathFromGdb(fileRaw);
+                    await this.applySubstitutePathIfNeeded(fileRaw, displayFile);
                     const line = parseInt(asString(frameObj.line) || '1', 10);
                     frames.push({
                         id: id++,
                         name: asString(frameObj.func) || '<unknown>',
-                        source: file ? { name: path.basename(file), path: file } : undefined,
+                        source: displayFile
+                            ? { name: path.basename(displayFile), path: displayFile }
+                            : undefined,
                         line: Number.isNaN(line) ? 1 : Math.max(1, line),
                         column: 1,
                     } as DebugProtocol.StackFrame);
