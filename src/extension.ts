@@ -33,9 +33,14 @@ async function compileFile(gppPath: string): Promise<string | null> {
     }
 
     const src = doc.fileName;
-    const exe = src.replace(/\.(cpp|c)$/i, '.exe');
+    const srcDir = path.dirname(src);
+    const outDir = path.join(srcDir, 'output');
+    const exeName = `${path.parse(src).name}.exe`;
+    const exe = path.join(outDir, exeName);
 
     try {
+        fs.mkdirSync(outDir, { recursive: true });
+
         const args = ['-g', '-O0', '-Wall', '-Wl,--disable-dynamicbase', src, '-o', exe];
 
         if (!fs.existsSync(gppPath)) {

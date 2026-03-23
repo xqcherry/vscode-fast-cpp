@@ -15,7 +15,7 @@ export async function ensureDefaultBuildTask() {
                 label: 'cpp: build',
                 type: 'shell',
                 command: '${config:maomao.gpp}',
-                args: ['-std=c++17', '-Wall', '-g', '${file}', '-o', '${fileDirname}\\${fileBasenameNoExtension}.exe'],
+                args: ['-std=c++17', '-Wall', '-g', '${file}', '-o', '${fileDirname}\\output\\${fileBasenameNoExtension}.exe'],
                 group: { kind: 'build', isDefault: true },
                 problemMatcher: ['$gcc'],
                 detail: 'MinGW 编译当前文件'
