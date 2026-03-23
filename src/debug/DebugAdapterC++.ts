@@ -276,7 +276,6 @@ export class DebugCPP extends DebugSession {
                 try {
                     await this.gdb.sendCommand(`-interpreter-exec console "set substitute-path ${rawDir} ${mappedDir}"`);
                     this.gdbSubstitutePathApplied.add(key);
-                    this.sendEvent(new OutputEvent(`[SourceMap] preinject: ${rawDir} -> ${mappedDir}\n`));
                 } catch (err: any) {
                     this.sendEvent(new OutputEvent(`[SourceMap warn] preinject 失败: ${err?.message || String(err)}\n`));
                 }
