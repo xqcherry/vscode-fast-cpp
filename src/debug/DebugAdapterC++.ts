@@ -325,6 +325,7 @@ export class DebugCPP extends DebugSession {
         try {
             this.programPath = args.program;
             this.cwd = args.cwd || path.dirname(this.programPath);
+            this.stopAtEntry = Boolean(args.stopAtEntry);
 
             const gdbPath = args.gdbPath || this.defaultGdbPath;
             this.gdb = new GDBController(gdbPath);
@@ -709,3 +710,5 @@ export class DebugCPP extends DebugSession {
         this.sendResponse(response);
     }
 }
+
+

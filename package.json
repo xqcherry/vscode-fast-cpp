@@ -140,7 +140,8 @@
             "request": "launch",
             "program": "${workspaceFolder}/a.exe",
             "cwd": "${workspaceFolder}",
-            "stopAtEntry": true
+            "stopAtEntry": true,
+            "stdinFile": "${workspaceFolder}/input.txt"
           }
         ]
       }
