@@ -101,7 +101,7 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.window.showInformationMessage('你好，测试！');
     });
 
-    const debug = vscode.commands.registerCommand('xq.debug', async () => {
+    const debug = vscode.commands.registerCommand('maomao.debug', async () => {
         const exe = await compileFile(toolchain.gppPath);
         if (!exe) {
             return;
@@ -109,7 +109,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
         const cwd = path.dirname(exe);
         const config: vscode.DebugConfiguration = {
-            type: 'xq_cppdbg',
+            type: 'maomao_cppdbg',
             name: 'C++ Debugger',
             request: 'launch',
             program: exe,
@@ -122,7 +122,7 @@ export async function activate(context: vscode.ExtensionContext) {
     });
 
     context.subscriptions.push(
-        vscode.debug.registerDebugAdapterDescriptorFactory('xq_cppdbg', {
+        vscode.debug.registerDebugAdapterDescriptorFactory('maomao_cppdbg', {
             createDebugAdapterDescriptor: (_session) => {
                 return new vscode.DebugAdapterInlineImplementation(new DebugCPP(toolchain.gdbPath));
             },

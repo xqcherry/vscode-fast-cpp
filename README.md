@@ -25,8 +25,8 @@
 
 编译成功后会在名为 `MinGW Run` 的终端中启动程序并保留窗口。
 
-### 3) 一键启动调试（`xq.debug`）
-`xq.debug` 会先编译，再启动内置调试器类型 `xq_cppdbg`：
+### 3) 一键启动调试（`maomao.debug`）
+`maomao.debug` 会先编译，再启动内置调试器类型 `maomao_cppdbg`：
 - 基于 GDB/MI 协议
 - 支持断点、继续、暂停、单步、堆栈、变量查看
 - 支持中文路径/非 ASCII 路径的调试兜底处理（自动复制到临时目录调试）
@@ -48,7 +48,7 @@
 
 默认快捷键：
 - `Ctrl+Shift+B` → `maomao.compile`
-- `Ctrl+F6` → `xq.debug`
+- `Ctrl+F6` → `maomao.debug`
 - `Ctrl+F5` → `maomao.hello`
 
 ---
@@ -71,7 +71,7 @@
 
 ## 调试器类型
 
-本扩展贡献了调试器类型：`xq_cppdbg`
+本扩展贡献了调试器类型：`maomao_cppdbg`
 
 可在 `launch.json` 中使用（最小示例）：
 
@@ -81,7 +81,7 @@
   "configurations": [
     {
       "name": "C++ Debugger",
-      "type": "xq_cppdbg",
+      "type": "maomao_cppdbg",
       "request": "launch",
       "program": "${workspaceFolder}/a.exe",
       "cwd": "${workspaceFolder}",
@@ -91,7 +91,7 @@
 }
 ```
 
-> 日常使用中，直接执行 `xq.debug` 即可自动编译并启动调试，一般不需要手写配置。
+> 日常使用中，直接执行 `maomao.debug` 即可自动编译并启动调试，一般不需要手写配置。
 
 ---
 

@@ -1,12 +1,12 @@
 {
-  "name": "vscode-fast-cpp",
-  "displayName": "vscode-fast-cpp",
+  "name": "fast-cpp",
+  "displayName": "fast-cpp",
   "description": "fast open a cpp code without download others!",
   "version": "0.1.0",
   "engines": {
     "vscode": "^1.104.0"
   },
-  "publisher": "maomao",
+  "publisher": "xqcherry",
   "categories": [
     "Other"
   ],
@@ -15,7 +15,7 @@
     "onLanguage:c",
     "onCommand:maomao.compile",
     "onCommand:maomao.hello",
-    "onCommand:xq.debug"
+    "onCommand:maomao.debug"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -61,7 +61,7 @@
         "title": "Say Hello"
       },
       {
-        "command": "xq.debug",
+        "command": "maomao.debug",
         "title": "GDB调试"
       }
     ],
@@ -77,7 +77,7 @@
         "when": "true"
       },
       {
-        "command": "xq.debug",
+        "command": "maomao.debug",
         "key": "ctrl+f6",
         "when": "true"
       }
@@ -91,12 +91,7 @@
         },
         {
           "when": "editorFocus",
-          "command": "maomao.hello",
-          "group": "navigation"
-        },
-        {
-          "when": "editorFocus",
-          "command": "xq.debug",
+          "command": "maomao.debug",
           "group": "navigation"
         }
       ]
@@ -104,7 +99,7 @@
     
     "debuggers": [
       {
-        "type": "xq_cppdbg",
+        "type": "maomao_cppdbg",
         "label": "C++ Debugger",
         "program": "./out/debug/DebugAdapterC++.js",
         "runtime": "node",
@@ -136,7 +131,7 @@
         "initialConfigurations": [
           {
             "name": "C++ Debugger",
-            "type": "xq_cppdbg",
+            "type": "maomao_cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/a.exe",
             "cwd": "${workspaceFolder}",
