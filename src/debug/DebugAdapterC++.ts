@@ -128,6 +128,8 @@ export class DebugCPP extends DebugSession {
     private gdb: GDBController;
     private cwd = '';
     private programPath = '';
+    private launched = false;
+    private readyToRun = false;
     private breakpoints = new Map<string, Array<{ line: number; id?: number }>>();
 
     private threads = new Map<number, { id: number; name: string }>();
@@ -222,6 +224,8 @@ export class DebugCPP extends DebugSession {
             await this.gdb.sendCommand(`-file-exec-and-symbols "${norProPath}"`);
             await this.gdb.sendCommand('-gdb-set mi-async on');
             await this.gdb.sendCommand(`-environment-cd "${norProCwd}"`);
+            this.launched = false;
+            this.readyToRun = true;
 
             this.sendResponse(response);
         } catch (err) {
@@ -239,6 +243,8 @@ export class DebugCPP extends DebugSession {
             }
             this.gdb.stop();
         }
+        this.readyToRun = false;
+        this.launched = false;
         this.sendResponse(response);
         this.sendEvent(new TerminatedEvent());
     }
@@ -336,8 +342,14 @@ export class DebugCPP extends DebugSession {
     }
 
     protected async configurationDoneRequest(response: DebugProtocol.ConfigurationDoneResponse): Promise<void> {
+        if (!this.readyToRun || this.launched) {
+            this.sendResponse(response);
+            return;
+        }
+
         try {
             await this.gdb.sendCommand('-exec-run');
+            this.launched = true;
             this.sendEvent(new OutputEvent(`[Launch] GDB-MI 启动成功, 路径: ${this.programPath}\n`));
         } catch (err: any) {
             this.sendEvent(new OutputEvent(`[run error] ${err.message}\n`));
